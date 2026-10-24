@@ -122,4 +122,8 @@ win11dash/
 
 ## 许可证
 
-暂未指定。
+本项目原创代码采用 [MIT 许可证](LICENSE) 发布：你可以自由使用、复制、修改、合并、发布、分发、再许可和销售，包括商用与闭源分发，只需在副本中保留版权声明与许可证声明。
+
+### 第三方组件
+
+`lib/` 目录内的 DLL 来自 [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) 及其依赖库，遵循各自原项目的许可证（LibreHardwareMonitor 主体为 MPL-2.0），不受本项目 MIT 许可证覆盖。重新分发时请一并遵守这些许可证。

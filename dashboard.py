@@ -615,7 +615,8 @@ class ClusterWidget(QWidget):
     def _bat_seg(self, p, x, y, w, h, pct, color, state):
         """电量槽（充电宝式 5 格，每格 20%）：
         放电=已亮格静止、最上一格闪烁；
-        充电=1..n+1 格逐格累积点亮后全灭、循环往复；满电=全亮常亮"""
+        充电=已亮格常亮，脉冲波从左向右扫过增亮、扫到下一格点亮一拍；
+        满电=全亮常亮"""
         th = self._th
         by = y - h / 2
         seg_w, gap, n = 10.0, 2.5, 5
@@ -624,26 +625,29 @@ class ClusterWidget(QWidget):
         # 整 20% 边界归下格：40% -> 2 格，60% -> 3 格
         n_lit = 0 if pct is None else min(n, int(pct // 20))
         blink_idx = None
-        fill = None
+        wave = None
         if state == "full" or (pct is not None and pct >= 99.5):
             n_lit = n                       # 插电已满：全亮常亮
         elif state == "discharging":
             blink_idx = min(n_lit, n - 1)   # 最上一格闪烁（满格也闪第5格）
         elif state == "charging":
-            # 逐格累积：1 -> 1,2 -> ... -> 1..n+1 -> 全灭 -> 往复
-            k = ph % (n_lit + 2)
-            fill = (k + 1) if k <= n_lit else 0
+            wave = int(now * 3.0) % (n_lit + 2)   # 波峰相位，0 = 休息帧
+        boost_col = lerp_color(color, QColor(255, 255, 255), 0.6)
         for i in range(n):
             sx = x + i * (seg_w + gap)
-            if fill is not None:
-                on = i < fill
+            if wave is not None:
+                # 已亮格常亮；波峰扫过的格增亮；扫到下一格时点亮一拍
+                on = i < n_lit or (i == n_lit and wave == n_lit + 1)
+                brush = boost_col if i == wave - 1 else color
             elif blink_idx is not None:
                 on = i < blink_idx or (i == blink_idx and ph % 2 == 0)
+                brush = color
             else:
                 on = i < n_lit
+                brush = color
             if on:
                 p.setPen(Qt.NoPen)
-                p.setBrush(color)
+                p.setBrush(brush)
             else:
                 p.setPen(QPen(C(th["track_pen"]), 1))
                 p.setBrush(C(th["track_fill"]))

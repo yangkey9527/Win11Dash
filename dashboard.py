@@ -637,12 +637,13 @@ class ClusterWidget(QWidget):
         for i in range(n):
             sx = x + i * (seg_w + gap)
             if wave is not None:
-                # 基础格常亮；波峰扫过保持增亮（堆积）；到下一格点亮一拍
-                on = i < n_lit or (i == n_lit and wave == n_lit + 1)
-                if wave >= 1 and i == wave - 1:
+                # 波峰从右（电池端）向左扫；扫过的格在其右侧保持余亮（堆积）
+                peak_i = n_lit + 1 - wave       # wave=1 峰在下一格，向左推进
+                on = i < n_lit or (i == n_lit and wave >= 1)
+                if wave >= 1 and i == peak_i:
                     brush = peak_col            # 波峰最亮
-                elif wave >= 1 and i < wave - 1 and i < n_lit:
-                    brush = trail_col           # 峰后余亮（堆积感）
+                elif wave >= 1 and i > peak_i and i <= n_lit:
+                    brush = trail_col           # 峰后余亮（右侧堆积）
                 else:
                     brush = color
             elif blink_idx is not None:

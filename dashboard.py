@@ -224,16 +224,16 @@ GAUGES_H = [
 ]
 
 GAUGES_V = [
-    ("cpu_temp", 105, 150, 50, 30, 110, "CPU 温度", "°C", 195, -210),
-    ("gpu_load", 105, 246, 60, 0, 100, "GPU 占用", "%", 195, -210),
-    ("cpu_load", 105, 374, 80, 0, 100, "CPU 占用", "%", 225, -270),
-    ("npu_load", 105, 502, 60, 0, 100, "NPU 占用", "%", 15, -210),
-    ("npu_gpu_temp", 105, 590, 46, 30, 110, "GPU 温度", "°C", 15, -210),
+    ("cpu_temp", 105, 118, 50, 30, 110, "CPU 温度", "°C", 195, -210),
+    ("gpu_load", 105, 214, 60, 0, 100, "GPU 占用", "%", 195, -210),
+    ("cpu_load", 105, 342, 80, 0, 100, "CPU 占用", "%", 225, -270),
+    ("npu_load", 105, 470, 60, 0, 100, "NPU 占用", "%", 15, -210),
+    ("npu_gpu_temp", 105, 558, 46, 30, 110, "GPU 温度", "°C", 15, -210),
 ]
 
 LAYOUTS = {
     "h": {"label": "横版", "w": 620, "h": 210, "gauges": GAUGES_H},
-    "v": {"label": "竖版", "w": 210, "h": 690, "gauges": GAUGES_V},
+    "v": {"label": "竖版", "w": 210, "h": 658, "gauges": GAUGES_V},
 }
 
 SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.5, 3.0, 0.05
@@ -574,10 +574,10 @@ class ClusterWidget(QWidget):
         p.drawText(QRectF(8, 30, 48, 16),
                    Qt.AlignRight | Qt.AlignVCenter, btxt)
 
-        # --- 磁盘行 y=650 / 672（仪表最下方） ---
+        # --- 磁盘行 y=618 / 640（仪表最下方） ---
         rows = [("C:", self.extra.get("disk_c_rate"), 96),
                 ("D:", self.extra.get("disk_d_rate"), 96)]
-        y = 650
+        y = 618
         for label, val, bw in rows:
             if val is None and label == "D:":
                 continue  # 无 D 盘跳过

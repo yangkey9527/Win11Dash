@@ -681,7 +681,8 @@ class HybridReader:
         self._psutil_fallback = None
         self._slow_tick = 0
         self._slow = {"disk_c_rate": None, "disk_d_rate": None,
-                      "wifi_pct": None, "battery_pct": None}
+                      "wifi_pct": None, "battery_pct": None,
+                      "battery_state": None}
         print(f"[sensor] LHM={'OK' if self.lhm else 'N/A'} "
               f"NPU={'OK' if self.npu and self.npu.available() else 'N/A'} "
               f"WiFi={'OK' if self.wifi and self.wifi.available() else 'N/A'}")
@@ -700,6 +701,15 @@ class HybridReader:
             b = pu.sensors_battery()
             if b is not None:
                 info["battery_pct"] = round(b.percent)
+                # 电池状态：charging(充电) / discharging(放电) / full(插电已满)
+                try:
+                    if b.power_plugged:
+                        info["battery_state"] = ("full" if b.percent >= 99
+                                                 else "charging")
+                    else:
+                        info["battery_state"] = "discharging"
+                except Exception:
+                    pass
         except Exception:
             pass
         wifi = self.wifi.read() if self.wifi else None

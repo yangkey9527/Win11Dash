@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
 from PySide6.QtCore import Qt, QTimer, QRectF, QPointF
 from PySide6.QtGui import (
@@ -373,7 +374,8 @@ class ClusterWidget(QWidget):
         self._tgt = {g[0]: 0.0 for g in self._gauges}
         self.extra = {"mem_used_gb": None, "mem_load": None,
                       "disk_c_rate": None, "disk_d_rate": None,
-                      "wifi_pct": None, "battery_pct": None}
+                      "wifi_pct": None, "battery_pct": None,
+                      "battery_state": None}
         # 磁盘速率自适应峰值（血槽比例尺，缓慢衰减）
         self._disk_peak = {"C": 50.0, "D": 50.0}
         # 指针样式：{仪表 key: True}
@@ -433,13 +435,15 @@ class ClusterWidget(QWidget):
                 self._cur[key] = v  # 首次直接置位
 
     def set_extra(self, mem_used_gb, mem_load=None, disk_c_rate=None,
-                  disk_d_rate=None, wifi_pct=None, battery_pct=None):
+                  disk_d_rate=None, wifi_pct=None, battery_pct=None,
+                  battery_state=None):
         self.extra["mem_used_gb"] = mem_used_gb
         self.extra["mem_load"] = mem_load
         self.extra["disk_c_rate"] = disk_c_rate
         self.extra["disk_d_rate"] = disk_d_rate
         self.extra["wifi_pct"] = wifi_pct
         self.extra["battery_pct"] = battery_pct
+        self.extra["battery_state"] = battery_state
         # 峰值缓慢衰减，让血槽对突发速率敏感
         for L, v in (("C", disk_c_rate), ("D", disk_d_rate)):
             if v is not None:
@@ -462,8 +466,9 @@ class ClusterWidget(QWidget):
             if abs(d) > 0.002:
                 self._net_cur[k] += d * 0.18
                 dirty = True
-        if dirty:
-            self.update()
+        if dirty or self.extra.get("battery_state") in (
+                "charging", "discharging"):
+            self.update()   # 充放电流光需要持续重绘
 
     # -- 绘制 -------------------------------------------------------------
 
@@ -607,6 +612,43 @@ class ClusterWidget(QWidget):
                 p.setBrush(C(th["track_fill"]))
             p.drawRoundedRect(QRectF(sx, by, seg_w, h), 2, 2)
 
+    def _bat_flow(self, p, x, y, w, h, ratio, color, state):
+        """电量槽充放电流光：亮斑沿已亮格移动，
+        charging 向电池图标方向，discharging 向外"""
+        L = max(0.0, min(1.0, ratio)) * w
+        if L < 8:
+            return
+        gw, period = 5.0, 16.0
+        travel = L + gw
+        speed = 22.0                       # px/s
+        now = time.time()
+        ph = (now * speed) % (travel * 2)  # 两个亮斑错相
+        glint = lerp_color(color, QColor(255, 255, 255), 0.62)
+        glint.setAlpha(170)
+        p.setPen(Qt.NoPen)
+        p.setBrush(glint)
+        by = y - h / 2
+        for k in range(2):
+            d = (ph + k * travel) % (travel * 2)
+            d = d if d <= travel else travel * 2 - d   # 折返平滑
+            gx = (x + d - gw) if state == "charging" else (x + L - d)
+            gx = max(x - gw * 0.4, min(x + L - gw * 0.6, gx))
+            if gx + gw > x and gx < x + L:
+                p.drawRoundedRect(QRectF(gx, by + 0.5, gw, h - 1),
+                                  1.5, 1.5)
+
+    def _draw_bolt(self, p, cx, cy, s=1.0):
+        """插电标识：电池图标内的小闪电"""
+        pts = [(0.9, -3.6), (-1.7, 0.4), (-0.2, 0.4),
+               (-0.9, 3.6), (1.7, -0.4), (0.2, -0.4)]
+        path = QPainterPath(QPointF(cx + pts[0][0] * s, cy + pts[0][1] * s))
+        for px, py in pts[1:]:
+            path.lineTo(cx + px * s, cy + py * s)
+        path.closeSubpath()
+        p.setPen(QPen(QColor(0, 0, 0, 80), 0.6))
+        p.setBrush(C((255, 243, 168, 240)))
+        p.drawPath(path)
+
     def _disk_grad(self):
         return [(t, C(c)) for t, c in self._th["disk_grad"]]
 
@@ -678,8 +720,11 @@ class ClusterWidget(QWidget):
 
         # 电量行（y=48，短槽 60）
         bat_col = self._bat_color(bat)
+        bstate = self.extra.get("battery_state")
         self._seg_bar(p, 514, 48, 60, 7,
                       None if bat is None else bat / 100.0, bat_col)
+        if bstate in ("charging", "discharging") and bat is not None:
+            self._bat_flow(p, 514, 48, 60, 7, bat / 100.0, bat_col, bstate)
         # 电池小图标（含填充）
         bgx, bgy, bgw, bgh = 574, 43.5, 18, 9
         p.setPen(QPen(C(th["stroke"]), 1.1))
@@ -694,6 +739,8 @@ class ClusterWidget(QWidget):
                 p.setBrush(bat_col)
                 p.drawRoundedRect(QRectF(bgx + 1.5, bgy + 1.5, fw, bgh - 3),
                                   1.5, 1.5)
+        if bstate in ("charging", "full"):
+            self._draw_bolt(p, bgx + bgw / 2, bgy + bgh / 2)   # 插电标识
         btxt = "--" if bat is None else f"{bat}%"
         p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         p.setPen(C(th["text_main"]))
@@ -737,8 +784,11 @@ class ClusterWidget(QWidget):
 
         # --- 电量行 y=38 ---
         bat_col = self._bat_color(bat)
+        bstate = self.extra.get("battery_state")
         self._seg_bar(p, 62, 38, 60, 7,
                       None if bat is None else bat / 100.0, bat_col)
+        if bstate in ("charging", "discharging") and bat is not None:
+            self._bat_flow(p, 62, 38, 60, 7, bat / 100.0, bat_col, bstate)
         bgx, bgy, bgw, bgh = 128, 33.5, 18, 9
         p.setPen(QPen(C(th["stroke"]), 1.1))
         p.setBrush(Qt.NoBrush)
@@ -752,6 +802,8 @@ class ClusterWidget(QWidget):
                 p.setBrush(bat_col)
                 p.drawRoundedRect(QRectF(bgx + 1.5, bgy + 1.5, fw, bgh - 3),
                                   1.5, 1.5)
+        if bstate in ("charging", "full"):
+            self._draw_bolt(p, bgx + bgw / 2, bgy + bgh / 2)   # 插电标识
         btxt = "--" if bat is None else f"{bat}%"
         p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         p.setPen(C(th["text_main"]))
@@ -1413,7 +1465,8 @@ class DashWindow(QWidget):
         self.cluster.set_net(d.get("net_down"), d.get("net_up"))
         self.cluster.set_extra(d.get("mem_used_gb"), d.get("mem_load"),
                                d.get("disk_c_rate"), d.get("disk_d_rate"),
-                               d.get("wifi_pct"), d.get("battery_pct"))
+                               d.get("wifi_pct"), d.get("battery_pct"),
+                               d.get("battery_state"))
         t = d.get("cpu_temp")
         if t is not None and (self._last_temp is None
                               or abs(t - self._last_temp) >= 0.5):

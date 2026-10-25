@@ -510,10 +510,10 @@ class ClusterWidget(QWidget):
                 sep = -sep
             if vertical:
                 lx, ly = cx + r + 12, cy + sep  # 光源在表右方，纵向错开
-                base_deg, half = 180.0, 36.0    # 向左辐射：遮罩缝隙较窄
+                base_deg, half = 180.0, 36.0    # 向左辐射（±36°）
             else:
                 lx, ly = cx + sep, cy - r - 12  # 光源在表上方，横向错开
-                base_deg, half = -90.0, 33.0    # 向下辐射：遮罩缝隙较窄
+                base_deg, half = -90.0, 46.0    # 向下辐射：两扇面恰在底部中央相交
             fan_r = 550.0
             fan = QPainterPath()
             fan.moveTo(lx, ly)
@@ -537,8 +537,11 @@ class ClusterWidget(QWidget):
             br = max(7.0, r * 0.18)             # 灯泡半径
             p.save()
             clip = QPainterPath()
-            clip.addRect(lx - br * 3, ly - 1, br * 6, br * 3 + 1)
-            p.setClipPath(clip)                 # 裁剪到下半平面
+            if vertical:
+                clip.addRect(lx - br * 3, ly - br * 3, br * 3, br * 6)
+            else:
+                clip.addRect(lx - br * 3, ly - 1, br * 6, br * 3 + 1)
+            p.setClipPath(clip)                 # 光晕只留在光束发射侧
             halo = QRadialGradient(lx, ly, br * 2.2)
             col.setAlpha(150)
             halo.setColorAt(0.0, col)           # 贴近灯泡最亮

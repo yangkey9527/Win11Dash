@@ -34,7 +34,7 @@ def load_config():
     except Exception:
         pass
     # 容错与钳制
-    if cfg["theme"] not in ("dark", "light", "amber"):
+    if cfg["theme"] not in ("dark", "light", "amber", "glow"):
         cfg["theme"] = "dark"
     if cfg["layout"] not in ("h", "v"):
         cfg["layout"] = "h"

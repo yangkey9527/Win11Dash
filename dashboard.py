@@ -486,12 +486,12 @@ class ClusterWidget(QWidget):
                              unit, a0, span, ratio, cur)
             if key == "cpu_load":
                 self._draw_center_digits(p, cx, cy, r)
+        if self._th.get("neon") is not None:
+            self._draw_neon_overhead(p)   # 灯泡/光束画在侧栏文字之下
         if self._layout_key == "h":
             self._draw_side_widgets_h(p)
         else:
             self._draw_side_widgets_v(p)
-        if self._th.get("neon") is not None:
-            self._draw_neon_overhead(p)
         p.end()
 
     def _draw_neon_overhead(self, p):
@@ -509,11 +509,11 @@ class ClusterWidget(QWidget):
             if i == 0:
                 sep = -sep
             if vertical:
-                lx, ly = cx + r + 26, cy + sep  # 光源在表右方，纵向错开
-                base_deg, half = 180.0, 50.0    # 向左辐射（±50°）
+                lx, ly = cx + r + 12, cy + sep  # 光源在表右方，纵向错开
+                base_deg, half = 180.0, 36.0    # 向左辐射：遮罩缝隙较窄
             else:
-                lx, ly = cx + sep, cy - r - 26  # 光源在表上方，横向错开
-                base_deg, half = -90.0, 45.0    # 向下辐射（±45°）
+                lx, ly = cx + sep, cy - r - 12  # 光源在表上方，横向错开
+                base_deg, half = -90.0, 33.0    # 向下辐射：遮罩缝隙较窄
             fan_r = 550.0
             fan = QPainterPath()
             fan.moveTo(lx, ly)
@@ -533,7 +533,7 @@ class ClusterWidget(QWidget):
             p.setBrush(QBrush(grad))
             p.drawPath(fan)
             # 灯泡本体：有直径的光源（亮芯 + 光晕，边缘渐隐）
-            br = max(6.0, r * 0.14)             # 灯泡半径
+            br = max(7.0, r * 0.18)             # 灯泡半径
             bulb = QRadialGradient(lx, ly, br * 2.2)
             col.setAlpha(230)
             bulb.setColorAt(0.0, col)           # 灯丝亮芯
@@ -545,6 +545,18 @@ class ClusterWidget(QWidget):
             bulb.setColorAt(1.0, col)
             p.setBrush(QBrush(bulb))
             p.drawEllipse(QPointF(lx, ly), br * 2.2, br * 2.2)
+            # 物理遮光罩：盖住上半部，只露底部一条缝向下发光
+            p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            shade_r = br * 1.6
+            shade = QPainterPath()
+            shade.moveTo(lx, ly)
+            shade.arcTo(QRectF(lx - shade_r, ly - shade_r,
+                               shade_r * 2, shade_r * 2), 180.0, -180.0)
+            shade.closeSubpath()
+            p.setPen(QPen(C((255, 205, 130, 40)), 1))   # 遮罩边缘微光
+            p.setBrush(C((24, 15, 6, 242)))
+            p.drawPath(shade)
+            p.setCompositionMode(QPainter.CompositionMode_Plus)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
     def _mini_bar(self, p, x, y, w, h, ratio, grad=None, color=None):

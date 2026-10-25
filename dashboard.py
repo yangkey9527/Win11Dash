@@ -613,48 +613,29 @@ class ClusterWidget(QWidget):
             p.drawRoundedRect(QRectF(sx, by, seg_w, h), 2, 2)
 
     def _bat_seg(self, p, x, y, w, h, pct, color, state):
-        """电量槽（充电宝式 5 格，每格 20%）：
-        放电=已亮格静止、最上一格闪烁；
-        充电=波峰从左向右扫过，扫过的格保持增亮（亮度堆积），
-        波峰到下一格点亮一拍后统一回落、循环；满电=全亮常亮"""
+        """电量槽（经典充电宝式 5 格，每格 20%）：
+        之前的电量格常亮，当前电量格慢闪烁；满电（>=99.5%）全亮常亮"""
         th = self._th
         by = y - h / 2
         seg_w, gap, n = 10.0, 2.5, 5
         now = time.time()
-        ph = int(now * 2.5)
+        blink_on = int(now * 1.25) % 2 == 0   # 慢闪烁：0.8s 亮 / 0.8s 灭
         # 整 20% 边界归下格：40% -> 2 格，60% -> 3 格
         n_lit = 0 if pct is None else min(n, int(pct // 20))
-        blink_idx = None
-        wave = None
         if state == "full" or (pct is not None and pct >= 99.5):
-            n_lit = n                       # 插电已满：全亮常亮
-        elif state == "discharging":
-            blink_idx = min(n_lit, n - 1)   # 最上一格闪烁（满格也闪第5格）
-        elif state == "charging":
-            wave = int(now * 2.5) % (n_lit + 2)   # 0=休息帧，1..n_lit+1=波峰位
-        peak_col = lerp_color(color, QColor(255, 255, 255), 0.65)
-        trail_col = lerp_color(color, QColor(255, 255, 255), 0.25)
+            n_lit = n                         # 满电：全亮常亮
+            blink_idx = None
+        else:
+            blink_idx = max(0, n_lit - 1)     # 当前电量格慢闪烁
         for i in range(n):
             sx = x + i * (seg_w + gap)
-            if wave is not None:
-                # 波峰从右（电池端）向左扫；扫过的格在其右侧保持余亮（堆积）
-                peak_i = n_lit + 1 - wave       # wave=1 峰在下一格，向左推进
-                on = i < n_lit or (i == n_lit and wave >= 1)
-                if wave >= 1 and i == peak_i:
-                    brush = peak_col            # 波峰最亮
-                elif wave >= 1 and i > peak_i and i <= n_lit:
-                    brush = trail_col           # 峰后余亮（右侧堆积）
-                else:
-                    brush = color
-            elif blink_idx is not None:
-                on = i < blink_idx or (i == blink_idx and ph % 2 == 0)
-                brush = color
-            else:
+            if blink_idx is None:
                 on = i < n_lit
-                brush = color
+            else:
+                on = i < blink_idx or (i == blink_idx and blink_on)
             if on:
                 p.setPen(Qt.NoPen)
-                p.setBrush(brush)
+                p.setBrush(color)
             else:
                 p.setPen(QPen(C(th["track_pen"]), 1))
                 p.setBrush(C(th["track_fill"]))

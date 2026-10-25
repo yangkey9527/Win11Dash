@@ -612,42 +612,55 @@ class ClusterWidget(QWidget):
                 p.setBrush(C(th["track_fill"]))
             p.drawRoundedRect(QRectF(sx, by, seg_w, h), 2, 2)
 
-    def _bat_flow(self, p, x, y, w, h, ratio, color, state):
-        """电量槽充放电流光：亮斑沿已亮格移动，
-        charging 向电池图标方向，discharging 向外"""
-        L = max(0.0, min(1.0, ratio)) * w
-        if L < 8:
-            return
-        gw, period = 5.0, 16.0
-        travel = L + gw
-        speed = 22.0                       # px/s
-        now = time.time()
-        ph = (now * speed) % (travel * 2)  # 两个亮斑错相
-        glint = lerp_color(color, QColor(255, 255, 255), 0.62)
-        glint.setAlpha(170)
-        p.setPen(Qt.NoPen)
-        p.setBrush(glint)
+    def _bat_seg(self, p, x, y, w, h, pct, color, state):
+        """电量槽（充电宝式 5 格，每格 20%）：
+        放电=已亮格静止、最上一格闪烁；充电=1..n+1 格轮流点亮；满电=全亮"""
+        th = self._th
         by = y - h / 2
-        for k in range(2):
-            d = (ph + k * travel) % (travel * 2)
-            d = d if d <= travel else travel * 2 - d   # 折返平滑
-            gx = (x + d - gw) if state == "charging" else (x + L - d)
-            gx = max(x - gw * 0.4, min(x + L - gw * 0.6, gx))
-            if gx + gw > x and gx < x + L:
-                p.drawRoundedRect(QRectF(gx, by + 0.5, gw, h - 1),
-                                  1.5, 1.5)
+        seg_w, gap, n = 10.0, 2.5, 5
+        now = time.time()
+        ph = int(now * 2.5)
+        # 整 20% 边界归下格：40% -> 2 格，60% -> 3 格
+        n_lit = 0 if pct is None else min(n, int(pct // 20))
+        blink_idx = None
+        chase_idx = None
+        if state == "full" or (pct is not None and pct >= 99.5):
+            n_lit = n                       # 插电已满：全亮
+        elif state == "discharging":
+            blink_idx = min(n_lit, n - 1)   # 最上一格闪烁（满格也闪第5格）
+        elif state == "charging":
+            n_chase = min(n, n_lit + 1)
+            chase_idx = ph % n_chase        # 1..n+1 格轮流点亮
+        for i in range(n):
+            sx = x + i * (seg_w + gap)
+            if chase_idx is not None:
+                on = (i == chase_idx)
+            elif blink_idx is not None:
+                on = i < blink_idx or (i == blink_idx and ph % 2 == 0)
+            else:
+                on = i < n_lit
+            if on:
+                p.setPen(Qt.NoPen)
+                p.setBrush(color)
+            else:
+                p.setPen(QPen(C(th["track_pen"]), 1))
+                p.setBrush(C(th["track_fill"]))
+            p.drawRoundedRect(QRectF(sx, by, seg_w, h), 2, 2)
 
-    def _draw_bolt(self, p, cx, cy, s=1.0):
-        """插电标识：电池图标内的小闪电"""
-        pts = [(0.9, -3.6), (-1.7, 0.4), (-0.2, 0.4),
-               (-0.9, 3.6), (1.7, -0.4), (0.2, -0.4)]
-        path = QPainterPath(QPointF(cx + pts[0][0] * s, cy + pts[0][1] * s))
-        for px, py in pts[1:]:
-            path.lineTo(cx + px * s, cy + py * s)
-        path.closeSubpath()
-        p.setPen(QPen(QColor(0, 0, 0, 80), 0.6))
-        p.setBrush(C((255, 243, 168, 240)))
-        p.drawPath(path)
+    def _draw_plug(self, p, cx, cy, s=1.0):
+        """插电标识：插头图标（两脚朝上 + 机身 + 线缆）"""
+        col = C(self._th["ok_green"])
+        p.setPen(QPen(col, 1.6 * s))
+        p.drawLine(QPointF(cx - 2.2 * s, cy - 5.5 * s),
+                   QPointF(cx - 2.2 * s, cy - 1.8 * s))
+        p.drawLine(QPointF(cx + 2.2 * s, cy - 5.5 * s),
+                   QPointF(cx + 2.2 * s, cy - 1.8 * s))
+        p.setPen(Qt.NoPen)
+        p.setBrush(col)
+        p.drawRoundedRect(QRectF(cx - 3.8 * s, cy - 1.8 * s,
+                                 7.6 * s, 4.6 * s), 1.5, 1.5)
+        p.setPen(QPen(col, 1.4 * s))
+        p.drawLine(QPointF(cx, cy + 2.8 * s), QPointF(cx, cy + 6.5 * s))
 
     def _disk_grad(self):
         return [(t, C(c)) for t, c in self._th["disk_grad"]]
@@ -718,13 +731,10 @@ class ClusterWidget(QWidget):
         p.drawText(QRectF(411, 15, 56, 16),
                    Qt.AlignRight | Qt.AlignVCenter, wtxt)
 
-        # 电量行（y=48，短槽 60）
+        # 电量行（y=48，短槽 60，充电宝式 5 格）
         bat_col = self._bat_color(bat)
         bstate = self.extra.get("battery_state")
-        self._seg_bar(p, 514, 48, 60, 7,
-                      None if bat is None else bat / 100.0, bat_col)
-        if bstate in ("charging", "discharging") and bat is not None:
-            self._bat_flow(p, 514, 48, 60, 7, bat / 100.0, bat_col, bstate)
+        self._bat_seg(p, 514, 48, 60, 7, bat, bat_col, bstate)
         # 电池小图标（含填充）
         bgx, bgy, bgw, bgh = 574, 43.5, 18, 9
         p.setPen(QPen(C(th["stroke"]), 1.1))
@@ -740,7 +750,7 @@ class ClusterWidget(QWidget):
                 p.drawRoundedRect(QRectF(bgx + 1.5, bgy + 1.5, fw, bgh - 3),
                                   1.5, 1.5)
         if bstate in ("charging", "full"):
-            self._draw_bolt(p, bgx + bgw / 2, bgy + bgh / 2)   # 插电标识
+            self._draw_plug(p, bgx + bgw + 12, bgy + bgh / 2)  # 右侧插头
         btxt = "--" if bat is None else f"{bat}%"
         p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         p.setPen(C(th["text_main"]))
@@ -782,13 +792,10 @@ class ClusterWidget(QWidget):
         p.drawText(QRectF(8, 8, 48, 16),
                    Qt.AlignRight | Qt.AlignVCenter, wtxt)
 
-        # --- 电量行 y=38 ---
+        # --- 电量行 y=38（充电宝式 5 格） ---
         bat_col = self._bat_color(bat)
         bstate = self.extra.get("battery_state")
-        self._seg_bar(p, 62, 38, 60, 7,
-                      None if bat is None else bat / 100.0, bat_col)
-        if bstate in ("charging", "discharging") and bat is not None:
-            self._bat_flow(p, 62, 38, 60, 7, bat / 100.0, bat_col, bstate)
+        self._bat_seg(p, 62, 38, 60, 7, bat, bat_col, bstate)
         bgx, bgy, bgw, bgh = 128, 33.5, 18, 9
         p.setPen(QPen(C(th["stroke"]), 1.1))
         p.setBrush(Qt.NoBrush)
@@ -803,7 +810,7 @@ class ClusterWidget(QWidget):
                 p.drawRoundedRect(QRectF(bgx + 1.5, bgy + 1.5, fw, bgh - 3),
                                   1.5, 1.5)
         if bstate in ("charging", "full"):
-            self._draw_bolt(p, bgx + bgw / 2, bgy + bgh / 2)   # 插电标识
+            self._draw_plug(p, bgx + bgw + 12, bgy + bgh / 2)  # 右侧插头
         btxt = "--" if bat is None else f"{bat}%"
         p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         p.setPen(C(th["text_main"]))

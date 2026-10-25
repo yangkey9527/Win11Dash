@@ -946,14 +946,14 @@ class ClusterWidget(QWidget):
             p.drawText(QPointF(cx - (tbr2.left() + tbr2.right()) / 2,
                                sy - (tbr2.top() + tbr2.bottom()) / 2), sub)
 
-    def _draw_dial_label(self, p, cx, cy, r, lab):
+    def _draw_dial_label(self, p, cx, cy, r, lab, ly_k=0.60):
         """指针表顶部表名（带底色衬托，指针划过仍可读）"""
         th = self._th
         p.setFont(QFont("Microsoft YaHei", max(7, int(r * 0.13)),
                         QFont.Weight.Bold))
         fm = p.fontMetrics()
         tbr = fm.tightBoundingRect(lab)
-        ly = cy - r * 0.60
+        ly = cy - r * ly_k   # 摆针模式用较小系数，避免文字贴刻度过高
         p.setPen(Qt.NoPen)
         p.setBrush(C(th.get("dial_win", (0, 0, 0, 150))))
         p.drawRoundedRect(QRectF(cx - tbr.width() / 2 - 3,
@@ -1015,7 +1015,7 @@ class ClusterWidget(QWidget):
         p.drawEllipse(QPointF(cx, cy), hub_r, hub_r)
 
         # 表名 + 读数窗
-        self._draw_dial_label(p, cx, cy, r, f"{label} {unit}")
+        self._draw_dial_label(p, cx, cy, r, f"{label} {unit}", ly_k=0.38)
         if unit == "°C":
             vtxt = "--" if raw is None else f"{raw:.0f}"
             vcol = temp_color(raw, th)
@@ -1470,16 +1470,11 @@ class DashWindow(QWidget):
             act.triggered.connect(
                 lambda chk, k=key: self._set_net_mode(k == "net"))
 
-        # 每个仪表的指针样式开关
-        m_needle = menu.addMenu("指针样式")
-        for gkey, glab in GAUGE_LABELS.items():
-            act = m_needle.addAction(glab)
-            act.setCheckable(True)
-            act.setChecked(bool(self._needle.get(gkey)))
-            act.triggered.connect(
-                lambda chk, k=gkey: self._toggle_needle(k))
-        nhint = m_needle.addAction("勾选=指针样式，取消=弧形样式")
-        nhint.setEnabled(False)
+        # 表盘样式一键切换：弧形 / 模拟摆针
+        a_needle = menu.addAction("模拟摆针样式")
+        a_needle.setCheckable(True)
+        a_needle.setChecked(bool(self._needle))
+        a_needle.triggered.connect(lambda chk: self._set_needle_all(chk))
 
         menu.addSeparator()
         a_op50 = menu.addAction("透明度 50%")
@@ -1514,12 +1509,9 @@ class DashWindow(QWidget):
         self.cluster.set_modes(self._needle, self._net_mode)
         self._save_cfg()
 
-    def _toggle_needle(self, gkey):
-        """单个仪表的指针/弧形样式切换"""
-        if self._needle.get(gkey):
-            self._needle.pop(gkey, None)
-        else:
-            self._needle[gkey] = True
+    def _set_needle_all(self, on):
+        """一键切换全部仪表的弧形/摆针样式"""
+        self._needle = {k: True for k in GAUGE_LABELS} if on else {}
         self.cluster.set_modes(self._needle, self._net_mode)
         self._save_cfg()
 

@@ -432,29 +432,37 @@ class ClusterWidget(QWidget):
         p.end()
 
     def _draw_neon_overhead(self, p):
-        """氖光顶光源：第二/第四表上方向下扇形辐射，覆盖全部五表。
-        加法混合叠加在仪表之上，模拟灯泡从表组上方向下打光。"""
+        """氖光光源：横版=第二/第四表上方向下扇形辐射；
+        竖版=第二/第四表右方向左扇形辐射。
+        加法混合，光从光源点发射、随距离逐渐变暗。"""
         gs = self._gauges
+        vertical = self._layout_key == "v"
         p.setPen(Qt.NoPen)
         p.setCompositionMode(QPainter.CompositionMode_Plus)
-        for idx in (1, 3):                      # 第二、第四表正上方
+        for idx in (1, 3):                      # 第二、第四表
             _, cx, cy, r, *_ = gs[idx]
-            lx, ly = cx, cy - r - 26            # 光源点（表顶上方）
-            fan_r = 700.0                       # 辐射半径（覆盖全窗）
-            half = 65.0                         # 半张角（度）
+            if vertical:
+                lx, ly = cx + r + 26, cy        # 光源在表右方
+                base_deg, half = 180.0, 75.0    # 向左辐射（±75°）
+            else:
+                lx, ly = cx, cy - r - 26        # 光源在表上方
+                base_deg, half = -90.0, 65.0    # 向下辐射（±65°）
+            fan_r = 550.0
             fan = QPainterPath()
             fan.moveTo(lx, ly)
             fan.arcTo(QRectF(lx - fan_r, ly - fan_r, fan_r * 2, fan_r * 2),
-                      -90 - half, half * 2)     # 视觉正下方向 ±half
+                      base_deg - half, half * 2)
             fan.closeSubpath()
             col = QColor(*self._th["neon"])
             grad = QRadialGradient(lx, ly, fan_r)
-            col.setAlpha(38)
-            grad.setColorAt(0.0, col)
-            col.setAlpha(16)
-            grad.setColorAt(0.45, col)
+            col.setAlpha(58)
+            grad.setColorAt(0.0, col)           # 光源处最亮
+            col.setAlpha(30)
+            grad.setColorAt(0.14, col)
+            col.setAlpha(10)
+            grad.setColorAt(0.4, col)
             col.setAlpha(0)
-            grad.setColorAt(1.0, col)
+            grad.setColorAt(1.0, col)           # 远端熄灭
             p.setBrush(QBrush(grad))
             p.drawPath(fan)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)

@@ -156,10 +156,11 @@ THEMES = {
         "icon_bg": (250, 252, 254, 250),
         "icon_border": (145, 155, 168),
         "icon_unit": (20, 28, 40, 190),
-        # 立体浮雕：上缘内阴影 / 底缘高光 / 主弧投影
+        # 立体浮雕：上缘内阴影 / 底缘高光 / 主弧投影；盘面同心圆蚀刻纹
         "shadow_arc": (20, 28, 40, 60),
         "hi_arc": (255, 255, 255, 210),
         "arc_shadow": (20, 28, 40, 55),
+        "texture": (20, 28, 40, 30),
         "gauges": {
             "cpu_temp": ((0, 132, 145), (210, 30, 80)),
             "gpu_load": ((108, 38, 200), (210, 30, 80)),
@@ -198,7 +199,7 @@ THEMES = {
         "icon_bg": (36, 25, 12, 248),
         "icon_border": (138, 103, 52),
         "icon_unit": (255, 212, 145, 165),
-        # 立体浮雕 + 氖光灯泡扇形光效
+        # 立体浮雕 + 氖光全盘背光透射（参考老式仪表背光改装）
         "shadow_arc": (30, 16, 4, 120),
         "hi_arc": (255, 225, 170, 75),
         "arc_shadow": (18, 10, 2, 130),
@@ -655,24 +656,33 @@ class ClusterWidget(QWidget):
         p.setBrush(C(th["glass"]))
         p.drawEllipse(QPointF(cx, cy), r, r)
 
-        # 氖光灯泡扇形泛光（琥珀）：开口方向的锥形光晕
+        # 盘面同心圆蚀刻纹（浅色质感）
+        tex = th.get("texture")
+        if tex is not None:
+            p.setPen(Qt.NoPen)
+            p.setBrush(Qt.NoBrush)
+            tc = QColor(*tex)
+            rr = r * 0.24
+            while rr < r - 5:
+                p.setPen(QPen(tc, 1))
+                p.drawEllipse(QPointF(cx, cy), rr, rr)
+                rr += 3.5
+
+        # 氖光全盘背光透射（琥珀）：光从盘面背后透出，刻度环附近最亮
         neon = th.get("neon")
         if neon is not None:
-            gap_mid = (a0_deg + span_deg / 2 + 180) % 360  # 开口缺口中点角
-            band = 45.0            # 亮带半宽（度）
-            cone = QConicalGradient(cx, cy, gap_mid)
+            glow = QRadialGradient(cx, cy, r)
             nc = QColor(*neon)
-            nc.setAlpha(58)
-            cone.setColorAt(0.0, nc)
-            cone.setColorAt(band / 360, QColor(0, 0, 0, 0))
-            cone.setColorAt(1 - band / 360, QColor(0, 0, 0, 0))
-            cone.setColorAt(1.0, nc)
-            fan = QPainterPath()
-            fan.moveTo(cx, cy)
-            fan.arcTo(arc_rect(cx, cy, r - 2), gap_mid - band, band * 2)
-            fan.closeSubpath()
-            p.setBrush(QBrush(cone))
-            p.drawPath(fan)
+            glow.setColorAt(0.0, QColor(0, 0, 0, 0))
+            nc.setAlpha(22)
+            glow.setColorAt(0.45, nc)
+            nc.setAlpha(55)
+            glow.setColorAt(0.78, nc)
+            nc.setAlpha(18)
+            glow.setColorAt(1.0, nc)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(glow))
+            p.drawEllipse(QPointF(cx, cy), r - 1, r - 1)
 
         # 浮雕立体感：上缘内阴影 + 底缘高光（顶光假设）
         sh = th.get("shadow_arc")
@@ -686,22 +696,6 @@ class ClusterWidget(QWidget):
         p.setPen(QPen(C(th["ring_edge"]), 1))
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QPointF(cx, cy), r - 1, r - 1)
-
-        # 氖光灯珠（开口中点、内缘）——cpu_load 开口被血槽占用，跳过
-        if neon is not None and key != "cpu_load":
-            gap_mid = (a0_deg + span_deg / 2 + 180) % 360
-            a = math.radians(gap_mid)
-            bx, by = cx + arc_r * math.cos(a), cy - arc_r * math.sin(a)
-            bulb_r = max(2.5, pen_w * 0.42)
-            bulb = QRadialGradient(bx, by, bulb_r * 2.2)
-            bulb.setColorAt(0.0, QColor(255, 250, 230, 235))
-            nc = QColor(*neon)
-            nc.setAlpha(150)
-            bulb.setColorAt(0.45, nc)
-            bulb.setColorAt(1.0, QColor(0, 0, 0, 0))
-            p.setBrush(QBrush(bulb))
-            p.setPen(Qt.NoPen)
-            p.drawEllipse(QPointF(bx, by), bulb_r * 2.2, bulb_r * 2.2)
 
         # 刻度点（沿扇区均匀分布）
         n = 12

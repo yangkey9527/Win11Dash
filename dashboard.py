@@ -224,16 +224,16 @@ GAUGES_H = [
 ]
 
 GAUGES_V = [
-    ("cpu_temp", 105, 158, 50, 30, 110, "CPU 温度", "°C", 195, -210),
-    ("gpu_load", 105, 252, 60, 0, 100, "GPU 占用", "%", 195, -210),
-    ("cpu_load", 105, 376, 80, 0, 100, "CPU 占用", "%", 225, -270),
-    ("npu_load", 105, 504, 60, 0, 100, "NPU 占用", "%", 15, -210),
-    ("npu_gpu_temp", 105, 592, 48, 30, 110, "GPU 温度", "°C", 15, -210),
+    ("cpu_temp", 105, 150, 50, 30, 110, "CPU 温度", "°C", 195, -210),
+    ("gpu_load", 105, 246, 60, 0, 100, "GPU 占用", "%", 195, -210),
+    ("cpu_load", 105, 374, 80, 0, 100, "CPU 占用", "%", 225, -270),
+    ("npu_load", 105, 502, 60, 0, 100, "NPU 占用", "%", 15, -210),
+    ("npu_gpu_temp", 105, 590, 46, 30, 110, "GPU 温度", "°C", 15, -210),
 ]
 
 LAYOUTS = {
     "h": {"label": "横版", "w": 620, "h": 210, "gauges": GAUGES_H},
-    "v": {"label": "竖版", "w": 210, "h": 660, "gauges": GAUGES_V},
+    "v": {"label": "竖版", "w": 210, "h": 690, "gauges": GAUGES_V},
 }
 
 SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.5, 3.0, 0.05
@@ -517,7 +517,7 @@ class ClusterWidget(QWidget):
                    Qt.AlignRight | Qt.AlignVCenter, btxt)
 
     def _draw_side_widgets_v(self, p):
-        """竖版：顶部自上而下四行——C:/D: 磁盘、WiFi、电量"""
+        """竖版：顶部两行 WiFi/电量，底部两行 C:/D: 磁盘速率"""
         th = self._th
         disk_grad = self._disk_grad()
         wifi = self.extra.get("wifi_pct")
@@ -525,10 +525,59 @@ class ClusterWidget(QWidget):
         on_c = C(th["side_on"])
         off_c = C(th["side_off"])
 
-        # --- 磁盘行 y=16 / 38 ---
+        # --- WiFi 行 y=16：数字(右对齐) | 分格槽 | 图标 ---
+        if wifi is None:
+            lv = 0
+        elif wifi >= 70:
+            lv = 3
+        elif wifi >= 40:
+            lv = 2
+        else:
+            lv = 1
+        wgx, wgy = 174, 20
+        p.setPen(Qt.NoPen)
+        p.setBrush(on_c if lv >= 1 else off_c)
+        p.drawEllipse(QPointF(wgx, wgy), 1.5, 1.5)
+        for i, rr in enumerate((4.0, 7.5)):
+            p.setPen(QPen(on_c if lv >= i + 2 else off_c, 1.6,
+                          Qt.SolidLine, Qt.RoundCap))
+            p.setBrush(Qt.NoBrush)
+            p.drawArc(arc_rect(wgx, wgy, rr), 50 * 16, 80 * 16)
+        self._seg_bar(p, 62, 16, 96, 7,
+                      None if wifi is None else wifi / 100.0, on_c)
+        p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        p.setPen(C(th["text_main"]))
+        wtxt = "--" if wifi is None else f"{wifi}%"
+        p.drawText(QRectF(8, 8, 48, 16),
+                   Qt.AlignRight | Qt.AlignVCenter, wtxt)
+
+        # --- 电量行 y=38 ---
+        bat_col = self._bat_color(bat)
+        self._seg_bar(p, 62, 38, 60, 7,
+                      None if bat is None else bat / 100.0, bat_col)
+        bgx, bgy, bgw, bgh = 128, 33.5, 18, 9
+        p.setPen(QPen(C(th["stroke"]), 1.1))
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(bgx, bgy, bgw, bgh), 2.5, 2.5)
+        p.setPen(Qt.NoPen)
+        p.setBrush(C(th["stroke"]))
+        p.drawRoundedRect(QRectF(bgx + bgw + 1, bgy + 2.5, 2.5, 4), 1, 1)
+        if bat is not None:
+            fw = (bgw - 3) * max(0.0, min(1.0, bat / 100.0))
+            if fw > 0.5:
+                p.setBrush(bat_col)
+                p.drawRoundedRect(QRectF(bgx + 1.5, bgy + 1.5, fw, bgh - 3),
+                                  1.5, 1.5)
+        btxt = "--" if bat is None else f"{bat}%"
+        p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        p.setPen(C(th["text_main"]))
+        p.drawText(QRectF(8, 30, 48, 16),
+                   Qt.AlignRight | Qt.AlignVCenter, btxt)
+
+        # --- 磁盘行 y=650 / 672（仪表最下方） ---
         rows = [("C:", self.extra.get("disk_c_rate"), 96),
                 ("D:", self.extra.get("disk_d_rate"), 96)]
-        y = 16
+        y = 650
         for label, val, bw in rows:
             if val is None and label == "D:":
                 continue  # 无 D 盘跳过
@@ -545,55 +594,6 @@ class ClusterWidget(QWidget):
             p.drawText(QRectF(30 + bw + 5, y - 8, 62, 16),
                        Qt.AlignLeft | Qt.AlignVCenter, fmt_rate(val))
             y += 22
-
-        # --- WiFi 行 y=60：数字(右对齐) | 分格槽 | 图标 ---
-        if wifi is None:
-            lv = 0
-        elif wifi >= 70:
-            lv = 3
-        elif wifi >= 40:
-            lv = 2
-        else:
-            lv = 1
-        wgx, wgy = 174, 64
-        p.setPen(Qt.NoPen)
-        p.setBrush(on_c if lv >= 1 else off_c)
-        p.drawEllipse(QPointF(wgx, wgy), 1.5, 1.5)
-        for i, rr in enumerate((4.0, 7.5)):
-            p.setPen(QPen(on_c if lv >= i + 2 else off_c, 1.6,
-                          Qt.SolidLine, Qt.RoundCap))
-            p.setBrush(Qt.NoBrush)
-            p.drawArc(arc_rect(wgx, wgy, rr), 50 * 16, 80 * 16)
-        self._seg_bar(p, 62, 60, 96, 7,
-                      None if wifi is None else wifi / 100.0, on_c)
-        p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        p.setPen(C(th["text_main"]))
-        wtxt = "--" if wifi is None else f"{wifi}%"
-        p.drawText(QRectF(8, 52, 48, 16),
-                   Qt.AlignRight | Qt.AlignVCenter, wtxt)
-
-        # --- 电量行 y=82 ---
-        bat_col = self._bat_color(bat)
-        self._seg_bar(p, 62, 82, 60, 7,
-                      None if bat is None else bat / 100.0, bat_col)
-        bgx, bgy, bgw, bgh = 128, 77.5, 18, 9
-        p.setPen(QPen(C(th["stroke"]), 1.1))
-        p.setBrush(Qt.NoBrush)
-        p.drawRoundedRect(QRectF(bgx, bgy, bgw, bgh), 2.5, 2.5)
-        p.setPen(Qt.NoPen)
-        p.setBrush(C(th["stroke"]))
-        p.drawRoundedRect(QRectF(bgx + bgw + 1, bgy + 2.5, 2.5, 4), 1, 1)
-        if bat is not None:
-            fw = (bgw - 3) * max(0.0, min(1.0, bat / 100.0))
-            if fw > 0.5:
-                p.setBrush(bat_col)
-                p.drawRoundedRect(QRectF(bgx + 1.5, bgy + 1.5, fw, bgh - 3),
-                                  1.5, 1.5)
-        btxt = "--" if bat is None else f"{bat}%"
-        p.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        p.setPen(C(th["text_main"]))
-        p.drawText(QRectF(8, 74, 48, 16),
-                   Qt.AlignRight | Qt.AlignVCenter, btxt)
 
     def _draw_gauge(self, p, key, cx, cy, r, vmin, vmax, ca, cb, label, unit,
                     a0_deg, span_deg, ratio, raw):

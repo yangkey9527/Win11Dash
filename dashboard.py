@@ -613,26 +613,27 @@ class ClusterWidget(QWidget):
             p.drawRoundedRect(QRectF(sx, by, seg_w, h), 2, 2)
 
     def _bat_seg(self, p, x, y, w, h, pct, color, state):
-        """电量槽（经典充电宝式 5 格，每格 20%）：
-        之前的电量格常亮，当前电量格慢闪烁；满电（>=99.5%）全亮常亮"""
+        """电量槽（经典充电宝式 5 格）：
+        0~20→第1格 21~40→第2格 41~60→第3格 61~80→第4格 81~100→第5格；
+        之前电量格常亮，当前电量格慢闪烁；插电满电（>=99.5%）全亮常亮"""
         th = self._th
         by = y - h / 2
         seg_w, gap, n = 10.0, 2.5, 5
         now = time.time()
         blink_on = int(now * 1.25) % 2 == 0   # 慢闪烁：0.8s 亮 / 0.8s 灭
-        # 整 20% 边界归下格：40% -> 2 格，60% -> 3 格
-        n_lit = 0 if pct is None else min(n, int(pct // 20))
         if state == "full" or (pct is not None and pct >= 99.5):
-            n_lit = n                         # 满电：全亮常亮
-            blink_idx = None
+            steady_n, blink_idx = n, None     # 满电：全亮常亮
         else:
-            blink_idx = max(0, n_lit - 1)     # 当前电量格慢闪烁
+            # 97% 落在 81~100 → 第 5 格闪，1-4 常亮
+            bucket = 1 if pct is None else min(
+                n, max(1, int(math.ceil(pct / 20.0))))
+            steady_n, blink_idx = bucket - 1, bucket - 1
         for i in range(n):
             sx = x + i * (seg_w + gap)
             if blink_idx is None:
-                on = i < n_lit
+                on = i < steady_n
             else:
-                on = i < blink_idx or (i == blink_idx and blink_on)
+                on = i < steady_n or (i == blink_idx and blink_on)
             if on:
                 p.setPen(Qt.NoPen)
                 p.setBrush(color)

@@ -504,14 +504,16 @@ class ClusterWidget(QWidget):
         p.setCompositionMode(QPainter.CompositionMode_Plus)
         for i, idx in enumerate((1, 3)):        # 第二、第四表
             _, cx, cy, r, *_ = gs[idx]
-            # 两束光各向外侧偏转，避免在中间叠加过亮
-            outward = -1.0 if i == 0 else 1.0
+            # 光束垂直（横版向下/竖版向左），靠光源位置外移拉开间距
+            sep = r * 0.55
+            if i == 0:
+                sep = -sep
             if vertical:
-                lx, ly = cx + r + 26, cy        # 光源在表右方
-                base_deg, half = 180.0 + outward * 25.0, 50.0
+                lx, ly = cx + r + 26, cy + sep  # 光源在表右方，纵向错开
+                base_deg, half = 180.0, 50.0    # 向左辐射（±50°）
             else:
-                lx, ly = cx, cy - r - 26        # 光源在表上方
-                base_deg, half = -90.0 + outward * 28.0, 45.0
+                lx, ly = cx + sep, cy - r - 26  # 光源在表上方，横向错开
+                base_deg, half = -90.0, 45.0    # 向下辐射（±45°）
             fan_r = 550.0
             fan = QPainterPath()
             fan.moveTo(lx, ly)
@@ -520,16 +522,29 @@ class ClusterWidget(QWidget):
             fan.closeSubpath()
             col = QColor(*self._th["neon"])
             grad = QRadialGradient(lx, ly, fan_r)
-            col.setAlpha(36)
-            grad.setColorAt(0.0, col)           # 光源处最亮
-            col.setAlpha(20)
-            grad.setColorAt(0.14, col)
-            col.setAlpha(6)
-            grad.setColorAt(0.3, col)
+            col.setAlpha(30)
+            grad.setColorAt(0.0, col)
+            col.setAlpha(16)
+            grad.setColorAt(0.16, col)
+            col.setAlpha(5)
+            grad.setColorAt(0.32, col)
             col.setAlpha(0)
             grad.setColorAt(0.5, col)           # 一半距离即基本熄灭
             p.setBrush(QBrush(grad))
             p.drawPath(fan)
+            # 灯泡本体：有直径的光源（亮芯 + 光晕，边缘渐隐）
+            br = max(6.0, r * 0.14)             # 灯泡半径
+            bulb = QRadialGradient(lx, ly, br * 2.2)
+            col.setAlpha(230)
+            bulb.setColorAt(0.0, col)           # 灯丝亮芯
+            col.setAlpha(110)
+            bulb.setColorAt(0.32, col)          # 玻璃泡
+            col.setAlpha(28)
+            bulb.setColorAt(0.62, col)
+            col.setAlpha(0)
+            bulb.setColorAt(1.0, col)
+            p.setBrush(QBrush(bulb))
+            p.drawEllipse(QPointF(lx, ly), br * 2.2, br * 2.2)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
     def _mini_bar(self, p, x, y, w, h, ratio, grad=None, color=None):

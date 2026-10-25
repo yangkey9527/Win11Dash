@@ -502,14 +502,16 @@ class ClusterWidget(QWidget):
         vertical = self._layout_key == "v"
         p.setPen(Qt.NoPen)
         p.setCompositionMode(QPainter.CompositionMode_Plus)
-        for idx in (1, 3):                      # 第二、第四表
+        for i, idx in enumerate((1, 3)):        # 第二、第四表
             _, cx, cy, r, *_ = gs[idx]
+            # 两束光各向外侧偏转，避免在中间叠加过亮
+            outward = -1.0 if i == 0 else 1.0
             if vertical:
                 lx, ly = cx + r + 26, cy        # 光源在表右方
-                base_deg, half = 180.0, 75.0    # 向左辐射（±75°）
+                base_deg, half = 180.0 + outward * 25.0, 50.0
             else:
                 lx, ly = cx, cy - r - 26        # 光源在表上方
-                base_deg, half = -90.0, 65.0    # 向下辐射（±65°）
+                base_deg, half = -90.0 + outward * 28.0, 45.0
             fan_r = 550.0
             fan = QPainterPath()
             fan.moveTo(lx, ly)
@@ -518,14 +520,14 @@ class ClusterWidget(QWidget):
             fan.closeSubpath()
             col = QColor(*self._th["neon"])
             grad = QRadialGradient(lx, ly, fan_r)
-            col.setAlpha(58)
+            col.setAlpha(36)
             grad.setColorAt(0.0, col)           # 光源处最亮
-            col.setAlpha(30)
+            col.setAlpha(20)
             grad.setColorAt(0.14, col)
-            col.setAlpha(10)
-            grad.setColorAt(0.4, col)
+            col.setAlpha(6)
+            grad.setColorAt(0.3, col)
             col.setAlpha(0)
-            grad.setColorAt(1.0, col)           # 远端熄灭
+            grad.setColorAt(0.5, col)           # 一半距离即基本熄灭
             p.setBrush(QBrush(grad))
             p.drawPath(fan)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)

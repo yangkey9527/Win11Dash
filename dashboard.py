@@ -125,9 +125,15 @@ def _autostart_cmd():
     return f'"{pyw}" "{script}"'
 
 
+def _no_window():
+    """GUI 子系统程序里拉控制台程序时必须加这个，否则会额外开一个控制台窗口，
+    既闪黑框又慢（实测 schtasks 查询从 0.05s 变成 0.5s+）"""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def is_autostart():
     r = subprocess.run(["schtasks", "/query", "/tn", TASK_NAME],
-                       capture_output=True)
+                       capture_output=True, creationflags=_no_window())
     return r.returncode == 0
 
 
@@ -135,10 +141,11 @@ def set_autostart(on):
     if on:
         subprocess.run(["schtasks", "/create", "/tn", TASK_NAME,
                         "/tr", _autostart_cmd(), "/sc", "onlogon",
-                        "/rl", "highest", "/f"], capture_output=True)
+                        "/rl", "highest", "/f"], capture_output=True,
+                       creationflags=_no_window())
     else:
         subprocess.run(["schtasks", "/delete", "/tn", TASK_NAME, "/f"],
-                       capture_output=True)
+                       capture_output=True, creationflags=_no_window())
 
 def arc_rect(cx, cy, r):
     return QRectF(cx - r, cy - r, r * 2, r * 2)
@@ -554,6 +561,7 @@ class DashWindow(QWidget):
         self._drag_pos = None
         self._last_temp = None
         self._first_hide = True
+        self._menu = None
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -632,18 +640,28 @@ class DashWindow(QWidget):
         if ev.button() == Qt.LeftButton:
             self._drag_pos = (ev.globalPosition().toPoint()
                               - self.frameGeometry().topLeft())
-        elif ev.button() == Qt.RightButton:
-            self._show_context_menu(ev.globalPosition().toPoint())
 
     def mouseMoveEvent(self, ev):
         if self._drag_pos is not None and ev.buttons() == Qt.LeftButton:
             self.move(ev.globalPosition().toPoint() - self._drag_pos)
 
     def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.RightButton:
+            # 在「右键松开」时弹菜单，而不是按下时或等系统的 WM_CONTEXTMENU：
+            #  - 松开时弹，松开事件已被本窗口消费，不会落到菜单上误触发菜单项
+            #  - 不依赖 WM_CONTEXTMENU 的派发时机（本机会延迟近 2 秒才派发）
+            #  - 配合 popup() 使用，避免 exec() 的嵌套事件循环把菜单当场关闭
+            self._show_context_menu(ev.globalPosition().toPoint())
+            return
         self._drag_pos = None
 
     def _show_context_menu(self, pos):
+        # 复用的旧菜单先回收（父对象为 self，否则子对象会一直堆积）
+        if self._menu is not None:
+            self._menu.deleteLater()
+            self._menu = None
         menu = QMenu(self)
+        self._menu = menu
         a_hide = menu.addAction("最小化到托盘")
         a_top = menu.addAction("置顶")
         a_top.setCheckable(True)
@@ -658,21 +676,18 @@ class DashWindow(QWidget):
         a_auto.setChecked(is_autostart())
         menu.addSeparator()
         a_quit = menu.addAction("退出")
-        chosen = menu.exec(pos)
-        if chosen is a_top:
-            self._toggle_topmost(a_top.isChecked())
-        elif chosen is a_auto:
-            set_autostart(a_auto.isChecked())
-        elif chosen is a_op50:
-            self.setWindowOpacity(0.5)
-        elif chosen is a_op80:
-            self.setWindowOpacity(0.8)
-        elif chosen is a_op100:
-            self.setWindowOpacity(1.0)
-        elif chosen is a_hide:
-            self.hide_to_tray()
-        elif chosen is a_quit:
-            self._quit()
+
+        a_hide.triggered.connect(self.hide_to_tray)
+        a_top.triggered.connect(lambda checked: self._toggle_topmost(checked))
+        a_op50.triggered.connect(lambda: self.setWindowOpacity(0.5))
+        a_op80.triggered.connect(lambda: self.setWindowOpacity(0.8))
+        a_op100.triggered.connect(lambda: self.setWindowOpacity(1.0))
+        a_auto.triggered.connect(lambda checked: set_autostart(checked))
+        a_quit.triggered.connect(self._quit)
+
+        # 必须用 popup() 而非 exec()：exec() 的嵌套事件循环会把随后到达的
+        # WM_CONTEXTMENU 事件转交给菜单，菜单当场自关（打包后必现，菜单一闪就没）
+        menu.popup(pos)
 
     def _toggle_topmost(self, checked=True):
         flags = self.windowFlags()

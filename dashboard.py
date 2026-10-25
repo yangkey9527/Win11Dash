@@ -800,43 +800,59 @@ class ClusterWidget(QWidget):
             fs = max(11, int(r * 0.34))
             p.setFont(QFont("Segoe UI", fs, QFont.Weight.Bold))
             p.setPen(vcol)
-            # 字形包围盒中心精确对齐目标点（AlignCenter 受 ascent/descent
-            # 影响会让纯数字视觉偏移）
+            # 墨迹包围盒（tightBoundingRect）中心对齐：排除 bearing 空隙
+            # 与缩放 hinting 造成的视觉偏移
             fm = p.fontMetrics()
-            br = fm.boundingRect(vtxt)
-            num_cy = cy + r * 0.055      # 原数字区矩形中心
-            p.drawText(QPointF(cx - br.center().x(), num_cy - br.center().y()),
+            tbr = fm.tightBoundingRect(vtxt)
+            num_cy = cy + r * 0.055      # 数字墨迹中心目标点
+            p.drawText(QPointF(cx - (tbr.left() + tbr.right()) / 2,
+                               num_cy - (tbr.top() + tbr.bottom()) / 2),
                        vtxt)
             p.setFont(QFont("Microsoft YaHei", max(7, int(r * 0.12)),
                             QFont.Weight.Bold))
             p.setPen(C(th["text_sub"]))
             lab = f"{label} {unit}"
             fm2 = p.fontMetrics()
-            br2 = fm2.boundingRect(lab)
+            tbr2 = fm2.tightBoundingRect(lab)
             lab_cy = cy + r * 0.47
-            p.drawText(QPointF(cx - br2.center().x(), lab_cy - br2.center().y()),
+            p.drawText(QPointF(cx - (tbr2.left() + tbr2.right()) / 2,
+                               lab_cy - (tbr2.top() + tbr2.bottom()) / 2),
                        lab)
 
     def _draw_center_digits(self, p, cx, cy, r):
-        """中央大表：CPU 占用大数字（右下角小 %） + 内存血槽（数字在血槽上方）"""
+        """中央大表：CPU 占用率小字 + 大数字（右下小 %） + 内存血槽"""
         th = self._th
         load = self._cur["cpu_load"]
         load_txt = "--" if load is None else f"{load:.0f}"
-        num_font = QFont("Segoe UI", 26, QFont.Weight.Bold)
+        num_rect = QRectF(cx - 80, cy - r * 0.30, 160, 48)
+
+        # "CPU 占用率" 小字（大数字上方，墨迹中心对齐）
+        lab_font = QFont("Microsoft YaHei", max(8, int(r * 0.135)),
+                         QFont.Weight.Bold)
+        p.setFont(lab_font)
+        p.setPen(C(th["text_sub"]))
+        fm_l = p.fontMetrics()
+        tl = fm_l.tightBoundingRect("CPU 占用率")
+        p.drawText(QPointF(num_rect.center().x() - (tl.left() + tl.right()) / 2,
+                           num_rect.top() - 7 - (tl.top() + tl.bottom()) / 2),
+                   "CPU 占用率")
+
+        # 大数字：墨迹包围盒（tightBoundingRect）中心对齐，
+        # 排除 bearing 空隙与缩放 hinting 造成的视觉偏移
+        num_font = QFont("Segoe UI", 34, QFont.Weight.Bold)
         p.setFont(num_font)
         p.setPen(C(th["text_main"]))
-        num_rect = QRectF(cx - 70, cy - r * 0.32, 140, 36)
-        # 字形包围盒中心对齐矩形中心（消除纯数字视觉偏移）
         fm = p.fontMetrics()
-        br = fm.boundingRect(load_txt)
-        p.drawText(QPointF(num_rect.center().x() - br.center().x(),
-                           num_rect.center().y() - br.center().y()), load_txt)
-        # 小 % 紧跟大数字右下角
-        w_num = fm.horizontalAdvance(load_txt)
-        p.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        tbr = fm.tightBoundingRect(load_txt)
+        base_x = num_rect.center().x() - (tbr.left() + tbr.right()) / 2
+        base_y = num_rect.center().y() - (tbr.top() + tbr.bottom()) / 2
+        p.drawText(QPointF(base_x, base_y), load_txt)
+        # 小 % 与大数字同基线，紧跟墨迹右缘
+        pct_font = QFont("Segoe UI", 11, QFont.Weight.Bold)
+        p.setFont(pct_font)
         p.setPen(C(th["text_pct"]))
-        p.drawText(QRectF(cx + w_num / 2 + 3, num_rect.bottom() - 19, 18, 16),
-                   Qt.AlignLeft | Qt.AlignBottom, "%")
+        p.drawText(QPointF(base_x + fm.horizontalAdvance(load_txt) + 3,
+                           base_y), "%")
 
         # 内存血槽（下移嵌入表盘底部开口区；数字在血槽上方）
         mem_gb = self.extra["mem_used_gb"]

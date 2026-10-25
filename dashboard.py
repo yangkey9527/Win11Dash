@@ -614,7 +614,8 @@ class ClusterWidget(QWidget):
 
     def _bat_seg(self, p, x, y, w, h, pct, color, state):
         """电量槽（充电宝式 5 格，每格 20%）：
-        放电=已亮格静止、最上一格闪烁；充电=1..n+1 格轮流点亮；满电=全亮"""
+        放电=已亮格静止、最上一格闪烁；
+        充电=1..n+1 格逐格累积点亮后全灭、循环往复；满电=全亮常亮"""
         th = self._th
         by = y - h / 2
         seg_w, gap, n = 10.0, 2.5, 5
@@ -623,18 +624,19 @@ class ClusterWidget(QWidget):
         # 整 20% 边界归下格：40% -> 2 格，60% -> 3 格
         n_lit = 0 if pct is None else min(n, int(pct // 20))
         blink_idx = None
-        chase_idx = None
+        fill = None
         if state == "full" or (pct is not None and pct >= 99.5):
-            n_lit = n                       # 插电已满：全亮
+            n_lit = n                       # 插电已满：全亮常亮
         elif state == "discharging":
             blink_idx = min(n_lit, n - 1)   # 最上一格闪烁（满格也闪第5格）
         elif state == "charging":
-            n_chase = min(n, n_lit + 1)
-            chase_idx = ph % n_chase        # 1..n+1 格轮流点亮
+            # 逐格累积：1 -> 1,2 -> ... -> 1..n+1 -> 全灭 -> 往复
+            k = ph % (n_lit + 2)
+            fill = (k + 1) if k <= n_lit else 0
         for i in range(n):
             sx = x + i * (seg_w + gap)
-            if chase_idx is not None:
-                on = (i == chase_idx)
+            if fill is not None:
+                on = i < fill
             elif blink_idx is not None:
                 on = i < blink_idx or (i == blink_idx and ph % 2 == 0)
             else:
@@ -736,7 +738,7 @@ class ClusterWidget(QWidget):
         bstate = self.extra.get("battery_state")
         self._bat_seg(p, 514, 48, 60, 7, bat, bat_col, bstate)
         # 电池小图标（含填充）
-        bgx, bgy, bgw, bgh = 574, 43.5, 18, 9
+        bgx, bgy, bgw, bgh = 578, 43.5, 18, 9
         p.setPen(QPen(C(th["stroke"]), 1.1))
         p.setBrush(Qt.NoBrush)
         p.drawRoundedRect(QRectF(bgx, bgy, bgw, bgh), 2.5, 2.5)

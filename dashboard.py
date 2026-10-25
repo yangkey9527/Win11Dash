@@ -427,7 +427,37 @@ class ClusterWidget(QWidget):
             self._draw_side_widgets_h(p)
         else:
             self._draw_side_widgets_v(p)
+        if self._th.get("neon") is not None:
+            self._draw_neon_overhead(p)
         p.end()
+
+    def _draw_neon_overhead(self, p):
+        """氖光顶光源：第二/第四表上方向下扇形辐射，覆盖全部五表。
+        加法混合叠加在仪表之上，模拟灯泡从表组上方向下打光。"""
+        gs = self._gauges
+        p.setPen(Qt.NoPen)
+        p.setCompositionMode(QPainter.CompositionMode_Plus)
+        for idx in (1, 3):                      # 第二、第四表正上方
+            _, cx, cy, r, *_ = gs[idx]
+            lx, ly = cx, cy - r - 26            # 光源点（表顶上方）
+            fan_r = 700.0                       # 辐射半径（覆盖全窗）
+            half = 65.0                         # 半张角（度）
+            fan = QPainterPath()
+            fan.moveTo(lx, ly)
+            fan.arcTo(QRectF(lx - fan_r, ly - fan_r, fan_r * 2, fan_r * 2),
+                      -90 - half, half * 2)     # 视觉正下方向 ±half
+            fan.closeSubpath()
+            col = QColor(*self._th["neon"])
+            grad = QRadialGradient(lx, ly, fan_r)
+            col.setAlpha(38)
+            grad.setColorAt(0.0, col)
+            col.setAlpha(16)
+            grad.setColorAt(0.45, col)
+            col.setAlpha(0)
+            grad.setColorAt(1.0, col)
+            p.setBrush(QBrush(grad))
+            p.drawPath(fan)
+        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
     def _mini_bar(self, p, x, y, w, h, ratio, grad=None, color=None):
         """小横槽：x,y 为中心线起点，ratio 0~1"""
@@ -668,21 +698,7 @@ class ClusterWidget(QWidget):
                 p.drawEllipse(QPointF(cx, cy), rr, rr)
                 rr += 3.5
 
-        # 氖光全盘背光透射（琥珀）：光从盘面背后透出，刻度环附近最亮
-        neon = th.get("neon")
-        if neon is not None:
-            glow = QRadialGradient(cx, cy, r)
-            nc = QColor(*neon)
-            glow.setColorAt(0.0, QColor(0, 0, 0, 0))
-            nc.setAlpha(22)
-            glow.setColorAt(0.45, nc)
-            nc.setAlpha(55)
-            glow.setColorAt(0.78, nc)
-            nc.setAlpha(18)
-            glow.setColorAt(1.0, nc)
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(glow))
-            p.drawEllipse(QPointF(cx, cy), r - 1, r - 1)
+        # 氖光不再画在单表盘面内——由 DashWindow 级顶光源扇形辐射统一覆盖
 
         # 浮雕立体感：上缘内阴影 + 底缘高光（顶光假设）
         sh = th.get("shadow_arc")
@@ -776,13 +792,22 @@ class ClusterWidget(QWidget):
             fs = max(11, int(r * 0.34))
             p.setFont(QFont("Segoe UI", fs, QFont.Weight.Bold))
             p.setPen(vcol)
-            p.drawText(QRectF(cx - r, cy - r * 0.22, r * 2, r * 0.55),
-                       Qt.AlignCenter, vtxt)
+            # 字形包围盒中心精确对齐目标点（AlignCenter 受 ascent/descent
+            # 影响会让纯数字视觉偏移）
+            fm = p.fontMetrics()
+            br = fm.boundingRect(vtxt)
+            num_cy = cy + r * 0.055      # 原数字区矩形中心
+            p.drawText(QPointF(cx - br.center().x(), num_cy - br.center().y()),
+                       vtxt)
             p.setFont(QFont("Microsoft YaHei", max(7, int(r * 0.12)),
                             QFont.Weight.Bold))
             p.setPen(C(th["text_sub"]))
-            p.drawText(QRectF(cx - r, cy + r * 0.36, r * 2, r * 0.22),
-                       Qt.AlignCenter, f"{label} {unit}")
+            lab = f"{label} {unit}"
+            fm2 = p.fontMetrics()
+            br2 = fm2.boundingRect(lab)
+            lab_cy = cy + r * 0.47
+            p.drawText(QPointF(cx - br2.center().x(), lab_cy - br2.center().y()),
+                       lab)
 
     def _draw_center_digits(self, p, cx, cy, r):
         """中央大表：CPU 占用大数字（右下角小 %） + 内存血槽（数字在血槽上方）"""
@@ -793,9 +818,13 @@ class ClusterWidget(QWidget):
         p.setFont(num_font)
         p.setPen(C(th["text_main"]))
         num_rect = QRectF(cx - 70, cy - r * 0.32, 140, 36)
-        p.drawText(num_rect, Qt.AlignCenter, load_txt)
+        # 字形包围盒中心对齐矩形中心（消除纯数字视觉偏移）
+        fm = p.fontMetrics()
+        br = fm.boundingRect(load_txt)
+        p.drawText(QPointF(num_rect.center().x() - br.center().x(),
+                           num_rect.center().y() - br.center().y()), load_txt)
         # 小 % 紧跟大数字右下角
-        w_num = p.fontMetrics().horizontalAdvance(load_txt)
+        w_num = fm.horizontalAdvance(load_txt)
         p.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         p.setPen(C(th["text_pct"]))
         p.drawText(QRectF(cx + w_num / 2 + 3, num_rect.bottom() - 19, 18, 16),

@@ -532,31 +532,34 @@ class ClusterWidget(QWidget):
             grad.setColorAt(0.5, col)           # 一半距离即基本熄灭
             p.setBrush(QBrush(grad))
             p.drawPath(fan)
-            # 灯泡本体：有直径的光源（亮芯 + 光晕，边缘渐隐）
+            # 灯泡：完整亮芯小球 + 仅下半部光晕（上半不发光，
+            # 光只向下发射，左右两束形态完全一致）
             br = max(7.0, r * 0.18)             # 灯泡半径
-            bulb = QRadialGradient(lx, ly, br * 2.2)
-            col.setAlpha(230)
-            bulb.setColorAt(0.0, col)           # 灯丝亮芯
-            col.setAlpha(110)
-            bulb.setColorAt(0.32, col)          # 玻璃泡
-            col.setAlpha(28)
-            bulb.setColorAt(0.62, col)
+            p.save()
+            clip = QPainterPath()
+            clip.addRect(lx - br * 3, ly - 1, br * 6, br * 3 + 1)
+            p.setClipPath(clip)                 # 裁剪到下半平面
+            halo = QRadialGradient(lx, ly, br * 2.2)
+            col.setAlpha(150)
+            halo.setColorAt(0.0, col)           # 贴近灯泡最亮
+            col.setAlpha(70)
+            halo.setColorAt(0.32, col)
+            col.setAlpha(20)
+            halo.setColorAt(0.62, col)
             col.setAlpha(0)
-            bulb.setColorAt(1.0, col)
-            p.setBrush(QBrush(bulb))
+            halo.setColorAt(1.0, col)
+            p.setBrush(QBrush(halo))
             p.drawEllipse(QPointF(lx, ly), br * 2.2, br * 2.2)
-            # 物理遮光罩：盖住上半部，只露底部一条缝向下发光
-            p.setCompositionMode(QPainter.CompositionMode_SourceOver)
-            shade_r = br * 1.6
-            shade = QPainterPath()
-            shade.moveTo(lx, ly)
-            shade.arcTo(QRectF(lx - shade_r, ly - shade_r,
-                               shade_r * 2, shade_r * 2), 180.0, -180.0)
-            shade.closeSubpath()
-            p.setPen(QPen(C((255, 205, 130, 40)), 1))   # 遮罩边缘微光
-            p.setBrush(C((24, 15, 6, 242)))
-            p.drawPath(shade)
-            p.setCompositionMode(QPainter.CompositionMode_Plus)
+            p.restore()
+            core = QRadialGradient(lx, ly, br)
+            col.setAlpha(235)
+            core.setColorAt(0.0, col)           # 灯丝亮芯
+            col.setAlpha(120)
+            core.setColorAt(0.55, col)
+            col.setAlpha(0)
+            core.setColorAt(1.0, col)
+            p.setBrush(QBrush(core))
+            p.drawEllipse(QPointF(lx, ly), br, br)
         p.setCompositionMode(QPainter.CompositionMode_SourceOver)
 
     def _mini_bar(self, p, x, y, w, h, ratio, grad=None, color=None):

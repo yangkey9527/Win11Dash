@@ -615,8 +615,8 @@ class ClusterWidget(QWidget):
     def _bat_seg(self, p, x, y, w, h, pct, color, state):
         """电量槽（充电宝式 5 格，每格 20%）：
         放电=已亮格静止、最上一格闪烁；
-        充电=已亮格常亮，脉冲波从左向右扫过增亮、扫到下一格点亮一拍；
-        满电=全亮常亮"""
+        充电=波峰从左向右扫过，扫过的格保持增亮（亮度堆积），
+        波峰到下一格点亮一拍后统一回落、循环；满电=全亮常亮"""
         th = self._th
         by = y - h / 2
         seg_w, gap, n = 10.0, 2.5, 5
@@ -631,14 +631,20 @@ class ClusterWidget(QWidget):
         elif state == "discharging":
             blink_idx = min(n_lit, n - 1)   # 最上一格闪烁（满格也闪第5格）
         elif state == "charging":
-            wave = int(now * 3.0) % (n_lit + 2)   # 波峰相位，0 = 休息帧
-        boost_col = lerp_color(color, QColor(255, 255, 255), 0.6)
+            wave = int(now * 2.5) % (n_lit + 2)   # 0=休息帧，1..n_lit+1=波峰位
+        peak_col = lerp_color(color, QColor(255, 255, 255), 0.65)
+        trail_col = lerp_color(color, QColor(255, 255, 255), 0.25)
         for i in range(n):
             sx = x + i * (seg_w + gap)
             if wave is not None:
-                # 已亮格常亮；波峰扫过的格增亮；扫到下一格时点亮一拍
+                # 基础格常亮；波峰扫过保持增亮（堆积）；到下一格点亮一拍
                 on = i < n_lit or (i == n_lit and wave == n_lit + 1)
-                brush = boost_col if i == wave - 1 else color
+                if wave >= 1 and i == wave - 1:
+                    brush = peak_col            # 波峰最亮
+                elif wave >= 1 and i < wave - 1 and i < n_lit:
+                    brush = trail_col           # 峰后余亮（堆积感）
+                else:
+                    brush = color
             elif blink_idx is not None:
                 on = i < blink_idx or (i == blink_idx and ph % 2 == 0)
                 brush = color

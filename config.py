@@ -12,14 +12,19 @@ CONF_DIR = os.path.join(
 CONF_PATH = os.path.join(CONF_DIR, "config.json")
 
 DEFAULTS = {
-    "theme": "dark",    # dark / light / amber
-    "layout": "h",      # h(横版 620x210) / v(竖版 210x660)
+    "theme": "dark",    # dark / light / amber / glow
+    "layout": "h",      # h(横版 620x210) / v(竖版 210x658)
     "scale": 1.0,       # 0.5 ~ 3.0
     "opacity": 1.0,     # 0.3 ~ 1.0
     "topmost": True,
     "pos_h": None,      # [x, y] 横版窗口位置
     "pos_v": None,      # [x, y] 竖版窗口位置
+    "needle": {},       # {仪表 key: True} 指针样式（缺省为弧形）
+    "net_mode": False,  # 第 4 表显示网络速度（否则显示 NPU 占用）
 }
+
+GAUGE_KEYS = ("cpu_temp", "gpu_load", "cpu_load", "npu_load",
+               "npu_gpu_temp")
 
 
 def load_config():
@@ -51,6 +56,12 @@ def load_config():
         p = cfg[k]
         if not (isinstance(p, (list, tuple)) and len(p) == 2):
             cfg[k] = None
+    # 指针样式：只保留已知仪表 key
+    nd = cfg.get("needle")
+    if not isinstance(nd, dict):
+        nd = {}
+    cfg["needle"] = {k: bool(v) for k, v in nd.items() if k in GAUGE_KEYS}
+    cfg["net_mode"] = bool(cfg["net_mode"])
     return cfg
 
 

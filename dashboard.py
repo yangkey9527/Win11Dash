@@ -82,6 +82,19 @@ def fmt_rate(mb):
     return f"{mb * 1024:.0f}KB/s"
 
 
+def rate_parts(mb):
+    """速率拆成 (数值文本, 单位)，便于数字与单位分开排版"""
+    if mb is None:
+        return "--", ""
+    if mb >= 1000:
+        return f"{mb / 1000:.1f}", "GB/s"
+    if mb >= 10:
+        return f"{mb:.0f}", "MB/s"
+    if mb >= 1:
+        return f"{mb:.1f}", "MB/s"
+    return f"{mb * 1024:.0f}", "KB/s"
+
+
 # ---------------------------------------------------------------------------
 # 主题：暗黑（现款霓虹）/ 浅色 / 琥珀赛车
 # 值为 (r,g,b[,a]) 元组，绘制时经 C() 转 QColor
@@ -115,6 +128,8 @@ THEMES = {
                 (10 ** 9, (0, 230, 118))),
         "ok_green": (0, 230, 118),
         "stroke": (255, 255, 255, 90),
+        "dial_win": (6, 9, 13, 200),   # 指针表底部读数窗
+        "needle_hub": (235, 240, 246),
         "icon_bg": (13, 17, 23, 240),
         "icon_border": (48, 54, 61),
         "icon_unit": (255, 255, 255, 140),
@@ -153,6 +168,8 @@ THEMES = {
                 (10 ** 9, (0, 140, 80))),
         "ok_green": (0, 140, 80),
         "stroke": (20, 28, 40, 155),
+        "dial_win": (252, 253, 255, 235),
+        "needle_hub": (30, 38, 50),
         "icon_bg": (250, 252, 254, 250),
         "icon_border": (145, 155, 168),
         "icon_unit": (20, 28, 40, 190),
@@ -196,6 +213,8 @@ THEMES = {
                 (10 ** 9, (255, 202, 84))),
         "ok_green": (255, 200, 88),
         "stroke": (255, 212, 145, 125),
+        "dial_win": (28, 18, 8, 205),
+        "needle_hub": (255, 214, 150),
         "icon_bg": (36, 25, 12, 248),
         "icon_border": (138, 103, 52),
         "icon_unit": (255, 212, 145, 165),
@@ -239,6 +258,8 @@ THEMES = {
                 (10 ** 9, (64, 255, 218))),
         "ok_green": (64, 255, 218),
         "stroke": (95, 255, 215, 120),
+        "dial_win": (3, 10, 11, 205),
+        "needle_hub": (170, 255, 238),
         "icon_bg": (6, 14, 15, 248),
         "icon_border": (32, 110, 98),
         "icon_unit": (95, 255, 215, 160),
@@ -283,6 +304,9 @@ LAYOUTS = {
     "h": {"label": "横版", "w": 620, "h": 210, "gauges": GAUGES_H},
     "v": {"label": "竖版", "w": 210, "h": 658, "gauges": GAUGES_V},
 }
+
+# 菜单用：仪表 key -> 显示名
+GAUGE_LABELS = {g[0]: f"{g[6]} {g[7]}" for g in LAYOUTS["h"]["gauges"]}
 
 SCALE_MIN, SCALE_MAX, SCALE_STEP = 0.5, 3.0, 0.05
 
@@ -337,7 +361,8 @@ def arc_rect(cx, cy, r):
 # ---------------------------------------------------------------------------
 
 class ClusterWidget(QWidget):
-    def __init__(self, parent, layout_key, theme_key, scale):
+    def __init__(self, parent, layout_key, theme_key, scale,
+                 needle=None, net_mode=False):
         super().__init__(parent)
         self._layout_key = layout_key
         self._theme_key = theme_key
@@ -351,6 +376,13 @@ class ClusterWidget(QWidget):
                       "wifi_pct": None, "battery_pct": None}
         # 磁盘速率自适应峰值（血槽比例尺，缓慢衰减）
         self._disk_peak = {"C": 50.0, "D": 50.0}
+        # 指针样式：{仪表 key: True}
+        self._needle = dict(needle or {})
+        # 第 4 表切换为网络速度
+        self._net_mode = bool(net_mode)
+        self._net_cur = {"down": None, "up": None}
+        self._net_tgt = {"down": 0.0, "up": 0.0}
+        self._net_peak = {"down": 2.0, "up": 1.0}
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(30)
@@ -364,6 +396,27 @@ class ClusterWidget(QWidget):
         self._th = THEMES[theme_key]
         self._scale = scale
         self.update()
+
+    def set_modes(self, needle, net_mode):
+        """指针样式 / 第4表网络模式切换"""
+        self._needle = dict(needle or {})
+        self._net_mode = bool(net_mode)
+        self.update()
+
+    def set_net(self, down, up):
+        """网络下行/上行速率（MB/s）"""
+        for k, v in (("down", down), ("up", up)):
+            if v is None:
+                continue
+            v = float(v)
+            if math.isnan(v) or math.isinf(v):
+                continue
+            self._net_tgt[k] = max(0.0, v)
+            if self._net_cur[k] is None:
+                self._net_cur[k] = self._net_tgt[k]
+            # 自适应峰值：缓慢衰减，让速率条对突发流量敏感
+            self._net_peak[k] = max(0.5, self._net_peak[k] * 0.97,
+                                    self._net_tgt[k])
 
     def set_value(self, key, v):
         if v is not None and key in self._tgt:
@@ -402,6 +455,13 @@ class ClusterWidget(QWidget):
             if abs(d) > 0.002:
                 self._cur[k] += d * 0.15
                 dirty = True
+        for k, cur in self._net_cur.items():
+            if cur is None:
+                continue
+            d = self._net_tgt[k] - cur
+            if abs(d) > 0.002:
+                self._net_cur[k] += d * 0.18
+                dirty = True
         if dirty:
             self.update()
 
@@ -415,10 +475,13 @@ class ClusterWidget(QWidget):
         for idx in (0, 4, 1, 3, 2):
             key, cx, cy, r, vmin, vmax, label, unit, a0, span \
                 = self._gauges[idx]
+            ca, cb = (C(c) for c in self._th["gauges"][key])
+            if key == "npu_load" and self._net_mode:
+                self._draw_net_gauge(p, cx, cy, r, a0, span, ca, cb)
+                continue
             cur = self._cur[key]
             ratio = 0.0 if cur is None else max(
                 0.0, min(1.0, (cur - vmin) / (vmax - vmin)))
-            ca, cb = (C(c) for c in self._th["gauges"][key])
             self._draw_gauge(p, key, cx, cy, r, vmin, vmax, ca, cb, label,
                              unit, a0, span, ratio, cur)
             if key == "cpu_load":
@@ -681,23 +744,15 @@ class ClusterWidget(QWidget):
                        Qt.AlignLeft | Qt.AlignVCenter, fmt_rate(val))
             y += 22
 
-    def _draw_gauge(self, p, key, cx, cy, r, vmin, vmax, ca, cb, label, unit,
-                    a0_deg, span_deg, ratio, raw):
+    def _draw_dial_face(self, p, cx, cy, r):
+        """表盘底：玻璃盘 + 同心圆蚀刻纹 + 浮雕立体 + 外圈边"""
         th = self._th
-        arc_r = r - 8
-        pen_w = max(5.0, r * 0.11)
-        start_q = int(a0_deg * 16)          # Qt 起始角（1/16 度）
-        span_q = int(span_deg * 16)         # Qt 扫掠角（带符号）
-
-        # 玻璃底
         p.setPen(Qt.NoPen)
         p.setBrush(C(th["glass"]))
         p.drawEllipse(QPointF(cx, cy), r, r)
 
-        # 盘面同心圆蚀刻纹（浅色质感）
         tex = th.get("texture")
         if tex is not None:
-            p.setPen(Qt.NoPen)
             p.setBrush(Qt.NoBrush)
             tc = QColor(*tex)
             rr = r * 0.24
@@ -705,8 +760,6 @@ class ClusterWidget(QWidget):
                 p.setPen(QPen(tc, 1))
                 p.drawEllipse(QPointF(cx, cy), rr, rr)
                 rr += 3.5
-
-        # 氖光不再画在单表盘面内——由 DashWindow 级顶光源扇形辐射统一覆盖
 
         # 浮雕立体感：上缘内阴影 + 底缘高光（顶光假设）
         sh = th.get("shadow_arc")
@@ -721,6 +774,66 @@ class ClusterWidget(QWidget):
         p.setBrush(Qt.NoBrush)
         p.drawEllipse(QPointF(cx, cy), r - 1, r - 1)
 
+    def _draw_arc_value(self, p, cx, cy, arc_r, a0_deg, span_deg, ratio,
+                        pen_w, ca, cb):
+        """轨道暗弧 + 前景分段渐变弧（含投影与发光层）"""
+        th = self._th
+        start_q = int(a0_deg * 16)
+        span_q = int(span_deg * 16)
+        p.setPen(QPen(C(th["track_arc"]), pen_w, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(arc_rect(cx, cy, arc_r), start_q, span_q)
+        if ratio <= 0.003:
+            return
+        segs = 40
+        span_total = span_deg * ratio
+        # 投影层（主弧下移 2px 暗弧，凸起立体感）
+        arc_sh = th.get("arc_shadow")
+        if arc_sh is not None:
+            p.setPen(QPen(C(arc_sh), pen_w, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(QRectF(cx - arc_r, cy - arc_r + 2, arc_r * 2,
+                             arc_r * 2), start_q, int(16 * span_total))
+        # 发光层
+        glow_pen = QPen(QColor(0, 0, 0, 0), pen_w + 5, Qt.SolidLine,
+                        Qt.RoundCap)
+        for i in range(segs):
+            t0 = i / segs
+            t1 = (i + 1) / segs
+            col = lerp_color(ca, cb, t0)
+            col.setAlpha(46)
+            glow_pen.setColor(col)
+            p.setPen(glow_pen)
+            aq0 = start_q + int(16 * span_total * t0)
+            aq1 = int(16 * span_total * (t1 - t0))
+            if aq1 == 0:
+                aq1 = 1 if span_total > 0 else -1
+            p.drawArc(arc_rect(cx, cy, arc_r), aq0, aq1)
+        # 主弧
+        main_pen = QPen(QColor(0, 0, 0), pen_w, Qt.SolidLine, Qt.RoundCap)
+        for i in range(segs):
+            t0 = i / segs
+            t1 = (i + 1) / segs
+            main_pen.setColor(lerp_color(ca, cb, t0))
+            p.setPen(main_pen)
+            aq0 = start_q + int(16 * span_total * t0)
+            aq1 = int(16 * span_total * (t1 - t0))
+            if aq1 == 0:
+                aq1 = 1 if span_total > 0 else -1
+            p.drawArc(arc_rect(cx, cy, arc_r), aq0, aq1)
+
+    def _draw_gauge(self, p, key, cx, cy, r, vmin, vmax, ca, cb, label, unit,
+                    a0_deg, span_deg, ratio, raw):
+        th = self._th
+        if self._needle.get(key):
+            # 中央大表指针模式下读数窗上移，避开下方内存血槽
+            win_cy = cy + r * 0.30 if key == "cpu_load" else None
+            self._draw_needle_gauge(p, key, cx, cy, r, vmin, vmax, ca, cb,
+                                    label, unit, raw, win_cy=win_cy)
+            return
+        arc_r = r - 8
+        pen_w = max(5.0, r * 0.11)
+
+        self._draw_dial_face(p, cx, cy, r)
+
         # 刻度点（沿扇区均匀分布）
         n = 12
         for i in range(n + 1):
@@ -733,51 +846,13 @@ class ClusterWidget(QWidget):
             p.drawLine(QPointF(cx + r_in * math.cos(a), cy - r_in * math.sin(a)),
                        QPointF(cx + r_out * math.cos(a), cy - r_out * math.sin(a)))
 
-        # 背景弧（暗）
-        pen = QPen(C(th["track_arc"]), pen_w, Qt.SolidLine, Qt.RoundCap)
-        p.setPen(pen)
-        p.drawArc(arc_rect(cx, cy, arc_r), start_q, span_q)
+        # 轨道 + 前景渐变弧
+        self._draw_arc_value(p, cx, cy, arc_r, a0_deg, span_deg, ratio,
+                             pen_w, ca, cb)
 
-        # 前景发光弧：分段渐变
+        # 尖端亮点
         if ratio > 0.003:
-            segs = 40
-            span_total = span_deg * ratio   # 带符号
-            # 投影层（主弧下移 2px 暗弧，凸起立体感）
-            arc_sh = th.get("arc_shadow")
-            if arc_sh is not None:
-                p.setPen(QPen(C(arc_sh), pen_w, Qt.SolidLine, Qt.RoundCap))
-                p.drawArc(QRectF(cx - arc_r, cy - arc_r + 2, arc_r * 2,
-                                 arc_r * 2), start_q, int(16 * span_total))
-            # 发光层
-            glow_pen = QPen(QColor(0, 0, 0, 0), pen_w + 5, Qt.SolidLine,
-                            Qt.RoundCap)
-            for i in range(segs):
-                t0 = i / segs
-                t1 = (i + 1) / segs
-                col = lerp_color(ca, cb, t0)
-                col.setAlpha(46)
-                glow_pen.setColor(col)
-                p.setPen(glow_pen)
-                aq0 = start_q + int(16 * span_total * t0)
-                aq1 = int(16 * span_total * (t1 - t0))
-                if aq1 == 0:
-                    aq1 = 1 if span_total > 0 else -1
-                p.drawArc(arc_rect(cx, cy, arc_r), aq0, aq1)
-            # 主弧
-            main_pen = QPen(QColor(0, 0, 0), pen_w, Qt.SolidLine,
-                            Qt.RoundCap)
-            for i in range(segs):
-                t0 = i / segs
-                t1 = (i + 1) / segs
-                main_pen.setColor(lerp_color(ca, cb, t0))
-                p.setPen(main_pen)
-                aq0 = start_q + int(16 * span_total * t0)
-                aq1 = int(16 * span_total * (t1 - t0))
-                if aq1 == 0:
-                    aq1 = 1 if span_total > 0 else -1
-                p.drawArc(arc_rect(cx, cy, arc_r), aq0, aq1)
-            # 尖端亮点
-            tip_deg = a0_deg + span_total
+            tip_deg = a0_deg + span_deg * ratio
             a = math.radians(tip_deg)
             tx, ty = cx + arc_r * math.cos(a), cy - arc_r * math.sin(a)
             tip_col = lerp_color(ca, cb, ratio)
@@ -819,46 +894,246 @@ class ClusterWidget(QWidget):
                                lab_cy - (tbr2.top() + tbr2.bottom()) / 2),
                        lab)
 
+    # --- 指针样式（模拟摆动指针） ------------------------------------------
+
+    # 量程刻度：225°(左下) → -45°(右下)，顺时针扫过 270°（经典模拟表）
+    NEEDLE_A0 = 225.0
+    NEEDLE_SPAN = -270.0
+
+    def _draw_needle(self, p, cx, cy, tip_r, ang_deg, color):
+        """从轴心画一根指针（尾配重 + 锥形针身）"""
+        ang = math.radians(ang_deg)
+        ux, uy = math.cos(ang), -math.sin(ang)
+        px, py = -uy, ux
+        w = max(1.3, tip_r * 0.07)
+        tail_r = tip_r * 0.20
+        tipx, tipy = cx + ux * tip_r, cy + uy * tip_r
+        bx, by = cx - ux * tail_r, cy - uy * tail_r
+        path = QPainterPath()
+        path.moveTo(bx + px * w * 0.55, by + py * w * 0.55)
+        path.lineTo(tipx, tipy)
+        path.lineTo(bx - px * w * 0.55, by - py * w * 0.55)
+        path.closeSubpath()
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawPath(path)
+
+    def _draw_readout(self, p, cx, cy, r, txt, col, sub=None, sub_col=None,
+                      win_cy=None, font_k=0.26):
+        """指针表底部读数窗（真实仪表的数字窗）"""
+        th = self._th
+        fs = max(10, int(r * font_k))
+        p.setFont(QFont("Segoe UI", fs, QFont.Weight.Bold))
+        fm = p.fontMetrics()
+        tbr = fm.tightBoundingRect(txt)
+        win_w = max(tbr.width() + 12, r * 0.40)
+        win_h = fs * 1.5
+        wy = cy + r * 0.52 if win_cy is None else win_cy
+        p.setPen(Qt.NoPen)
+        p.setBrush(C(th.get("dial_win", (0, 0, 0, 150))))
+        p.drawRoundedRect(QRectF(cx - win_w / 2, wy - win_h / 2,
+                                  win_w, win_h), 3, 3)
+        p.setPen(col)
+        p.drawText(QPointF(cx - (tbr.left() + tbr.right()) / 2,
+                           wy - (tbr.top() + tbr.bottom()) / 2), txt)
+        if sub:
+            fs2 = max(7, int(r * 0.13))
+            p.setFont(QFont("Segoe UI", fs2, QFont.Weight.Bold))
+            fm2 = p.fontMetrics()
+            tbr2 = fm2.tightBoundingRect(sub)
+            p.setPen(sub_col or C(th["text_sub"]))
+            sy = wy + win_h / 2 + fs2 * 1.45
+            p.drawText(QPointF(cx - (tbr2.left() + tbr2.right()) / 2,
+                               sy - (tbr2.top() + tbr2.bottom()) / 2), sub)
+
+    def _draw_dial_label(self, p, cx, cy, r, lab):
+        """指针表顶部表名（带底色衬托，指针划过仍可读）"""
+        th = self._th
+        p.setFont(QFont("Microsoft YaHei", max(7, int(r * 0.13)),
+                        QFont.Weight.Bold))
+        fm = p.fontMetrics()
+        tbr = fm.tightBoundingRect(lab)
+        ly = cy - r * 0.60
+        p.setPen(Qt.NoPen)
+        p.setBrush(C(th.get("dial_win", (0, 0, 0, 150))))
+        p.drawRoundedRect(QRectF(cx - tbr.width() / 2 - 3,
+                                  ly - tbr.height() / 2 - 1,
+                                  tbr.width() + 6, tbr.height() + 2), 2, 2)
+        p.setPen(C(th["text_sub"]))
+        p.drawText(QPointF(cx - (tbr.left() + tbr.right()) / 2,
+                           ly - (tbr.top() + tbr.bottom()) / 2), lab)
+
+    def _draw_needle_gauge(self, p, key, cx, cy, r, vmin, vmax, ca, cb,
+                           label, unit, raw, raw2=None, ca2=None, win_cy=None):
+        """模拟摆动指针表：量程色带 + 刻度 + 指针 + 底部数字窗"""
+        th = self._th
+        self._draw_dial_face(p, cx, cy, r)
+        ratio = 0.0 if raw is None else max(
+            0.0, min(1.0, (raw - vmin) / (vmax - vmin)))
+        a0, span = self.NEEDLE_A0, self.NEEDLE_SPAN
+
+        # 量程色带（低位→高位渐变）
+        track_r = r * 0.80
+        segs = 36
+        pen_w = max(3.0, r * 0.075)
+        for i in range(segs):
+            t0 = i / segs
+            col = lerp_color(ca, cb, t0)
+            col.setAlpha(95)
+            p.setPen(QPen(col, pen_w, Qt.SolidLine, Qt.RoundCap))
+            q0 = int((a0 + span * t0) * 16)
+            q1 = int((span / segs) * 16) or -1
+            p.drawArc(arc_rect(cx, cy, track_r), q0, q1)
+
+        # 刻度线
+        tick_r = r - 4
+        n = 13
+        for i in range(n):
+            a_deg = a0 + span * i / (n - 1)
+            a = math.radians(a_deg)
+            major = (i % 3 == 0)
+            r_in = tick_r - (9 if major else 5)
+            p.setPen(QPen(C(th["tick_hi"] if major else th["tick_lo"]),
+                          1.6 if major else 1))
+            p.drawLine(QPointF(cx + r_in * math.cos(a),
+                               cy - r_in * math.sin(a)),
+                       QPointF(cx + tick_r * math.cos(a),
+                               cy - tick_r * math.sin(a)))
+
+        # 指针（主针 + 可选副针）
+        self._draw_needle(p, cx, cy, r - 14, a0 + span * ratio,
+                          lerp_color(ca, cb, ratio))
+        if raw2 is not None:
+            ratio2 = max(0.0, min(1.0, (raw2 - vmin) / (vmax - vmin)))
+            self._draw_needle(p, cx, cy, r * 0.52, a0 + span * ratio2,
+                              ca2 or cb)
+
+        # 轴心
+        hub_r = max(2.5, r * 0.075)
+        p.setPen(Qt.NoPen)
+        p.setBrush(C(th.get("needle_hub", th["stroke"])))
+        p.drawEllipse(QPointF(cx, cy), hub_r, hub_r)
+
+        # 表名 + 读数窗
+        self._draw_dial_label(p, cx, cy, r, f"{label} {unit}")
+        if unit == "°C":
+            vtxt = "--" if raw is None else f"{raw:.0f}"
+            vcol = temp_color(raw, th)
+        else:
+            vtxt = "--" if raw is None else f"{raw:.0f}"
+            vcol = C(th["text_num"])
+        sub = None
+        sub_col = None
+        if raw2 is not None:
+            up_n, up_u = rate_parts(raw2)
+            sub = f"↑{up_n}{up_u}"
+            sub_col = ca2 or C(th["text_sub"])
+        self._draw_readout(p, cx, cy, r, vtxt, vcol, sub, sub_col,
+                           win_cy=win_cy)
+
+    # --- 网络速度表（第 4 表切换） ------------------------------------------
+
+    def _draw_net_gauge(self, p, cx, cy, r, a0, span, ca, cb):
+        """网络速度表：内环=下行速率，外环=上行速率"""
+        down = self._net_cur["down"]
+        up = self._net_cur["up"]
+        peak_d = max(self._net_peak["down"], 0.5)
+        peak_u = max(self._net_peak["up"], 0.5)
+
+        if self._needle.get("npu_load"):
+            # 指针式：长针=下行，短针=上行
+            self._draw_needle_gauge(p, "npu_load", cx, cy, r, 0,
+                                    max(peak_d, peak_u), ca, cb,
+                                    "网络", "↓↑", down, raw2=up, ca2=cb)
+            return
+
+        self._draw_dial_face(p, cx, cy, r)
+        pen_w = max(4.0, r * 0.085)
+        inner_r = r - 20      # 内环：下行
+        outer_r = r - 6       # 外环：上行
+        for ring_r, val, peak, col_a, col_b in (
+                (inner_r, down, peak_d, ca, ca),
+                (outer_r, up, peak_u, cb, cb)):
+            ratio = 0.0 if val is None else max(
+                0.0, min(1.0, val / peak))
+            self._draw_arc_value(p, cx, cy, ring_r, a0, span, ratio,
+                                 pen_w, col_a, col_b)
+
+        # 中心读数：下行大数字 + 上行小字
+        th = self._th
+        d_n, d_u = rate_parts(down)
+        u_n, u_u = rate_parts(up)
+        fs = max(11, int(r * 0.30))
+        p.setFont(QFont("Segoe UI", fs, QFont.Weight.Bold))
+        fm = p.fontMetrics()
+        tbr = fm.tightBoundingRect(d_n)
+        ny = cy - r * 0.08
+        p.setPen(C(th["text_num"]))
+        p.drawText(QPointF(cx - (tbr.left() + tbr.right()) / 2,
+                           ny - (tbr.top() + tbr.bottom()) / 2), d_n)
+        # 单位紧跟数字
+        p.setFont(QFont("Segoe UI", max(7, int(r * 0.13)),
+                        QFont.Weight.Bold))
+        p.setPen(C(th["text_pct"]))
+        p.drawText(QPointF(cx + tbr.width() / 2 + 3, ny), d_u)
+        # 上行（居中于下行数字下方）
+        up_txt = f"↑{u_n}{u_u}"
+        p.setFont(QFont("Segoe UI", max(7, int(r * 0.14)),
+                        QFont.Weight.Bold))
+        fm_u = p.fontMetrics()
+        tbr_u = fm_u.tightBoundingRect(up_txt)
+        uy = cy + r * 0.32
+        p.setPen(cb)
+        p.drawText(QPointF(cx - (tbr_u.left() + tbr_u.right()) / 2,
+                           uy - (tbr_u.top() + tbr_u.bottom()) / 2), up_txt)
+        # 表名
+        self._draw_dial_label(p, cx, cy, r, "网络 ↓↑")
+
     def _draw_center_digits(self, p, cx, cy, r):
         """中央大表：CPU 占用率小字 + 大数字（右下小 %） + 内存血槽"""
         th = self._th
+        needle_mode = bool(self._needle.get("cpu_load"))
         load = self._cur["cpu_load"]
         load_txt = "--" if load is None else f"{load:.0f}"
-        num_rect = QRectF(cx - 80, cy - r * 0.30, 160, 48)
 
-        # "CPU 占用率" 小字（大数字上方，墨迹中心对齐）
-        lab_font = QFont("Microsoft YaHei", max(8, int(r * 0.135)),
-                         QFont.Weight.Bold)
-        p.setFont(lab_font)
-        p.setPen(C(th["text_sub"]))
-        fm_l = p.fontMetrics()
-        tl = fm_l.tightBoundingRect("CPU 占用率")
-        p.drawText(QPointF(num_rect.center().x() - (tl.left() + tl.right()) / 2,
-                           num_rect.top() - 7 - (tl.top() + tl.bottom()) / 2),
-                   "CPU 占用率")
+        if not needle_mode:
+            num_rect = QRectF(cx - 80, cy - r * 0.30, 160, 48)
 
-        # 大数字：墨迹包围盒（tightBoundingRect）中心对齐，
-        # 排除 bearing 空隙与缩放 hinting 造成的视觉偏移
-        num_font = QFont("Segoe UI", 34, QFont.Weight.Bold)
-        p.setFont(num_font)
-        p.setPen(C(th["text_main"]))
-        fm = p.fontMetrics()
-        tbr = fm.tightBoundingRect(load_txt)
-        base_x = num_rect.center().x() - (tbr.left() + tbr.right()) / 2
-        base_y = num_rect.center().y() - (tbr.top() + tbr.bottom()) / 2
-        p.drawText(QPointF(base_x, base_y), load_txt)
-        # 小 % 与大数字同基线，紧跟墨迹右缘
-        pct_font = QFont("Segoe UI", 11, QFont.Weight.Bold)
-        p.setFont(pct_font)
-        p.setPen(C(th["text_pct"]))
-        p.drawText(QPointF(base_x + fm.horizontalAdvance(load_txt) + 3,
-                           base_y), "%")
+            # "CPU 占用率" 小字（大数字上方，墨迹中心对齐）
+            lab_font = QFont("Microsoft YaHei", max(8, int(r * 0.135)),
+                             QFont.Weight.Bold)
+            p.setFont(lab_font)
+            p.setPen(C(th["text_sub"]))
+            fm_l = p.fontMetrics()
+            tl = fm_l.tightBoundingRect("CPU 占用率")
+            p.drawText(QPointF(
+                num_rect.center().x() - (tl.left() + tl.right()) / 2,
+                num_rect.top() - 7 - (tl.top() + tl.bottom()) / 2),
+                "CPU 占用率")
 
-        # 内存血槽（下移嵌入表盘底部开口区；数字在血槽上方）
+            # 大数字：墨迹包围盒（tightBoundingRect）中心对齐，
+            # 排除 bearing 空隙与缩放 hinting 造成的视觉偏移
+            num_font = QFont("Segoe UI", 34, QFont.Weight.Bold)
+            p.setFont(num_font)
+            p.setPen(C(th["text_main"]))
+            fm = p.fontMetrics()
+            tbr = fm.tightBoundingRect(load_txt)
+            base_x = num_rect.center().x() - (tbr.left() + tbr.right()) / 2
+            base_y = num_rect.center().y() - (tbr.top() + tbr.bottom()) / 2
+            p.drawText(QPointF(base_x, base_y), load_txt)
+            # 小 % 与大数字同基线，紧跟墨迹右缘
+            pct_font = QFont("Segoe UI", 11, QFont.Weight.Bold)
+            p.setFont(pct_font)
+            p.setPen(C(th["text_pct"]))
+            p.drawText(QPointF(base_x + fm.horizontalAdvance(load_txt) + 3,
+                               base_y), "%")
+
+        # 内存血槽（指针模式下移，避开指针表读数窗）
         mem_gb = self.extra["mem_used_gb"]
         mem_pct = self.extra.get("mem_load")
         bar_w, bar_h = r * 0.75, 9
-        bx, by = cx - bar_w / 2, cy + r * 0.66
+        bx = cx - bar_w / 2
+        by = cy + (r * 0.74 if needle_mode else r * 0.66)
         # 数字行：血槽上方
         mem_txt = ("--" if mem_gb is None else f"{mem_gb:.1f}GB") \
             + ("  " if mem_pct is not None and mem_gb is not None else "") \
@@ -949,12 +1224,15 @@ class DashWindow(QWidget):
         self._layout_key = cfg.get("layout", "h")
         self._theme_key = cfg.get("theme", "dark")
         self._th = THEMES[self._theme_key]
+        self._needle = dict(cfg.get("needle") or {})
+        self._net_mode = bool(cfg.get("net_mode", False))
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.cluster = ClusterWidget(self, self._layout_key,
-                                     self._theme_key, self._scale)
+                                     self._theme_key, self._scale,
+                                     self._needle, self._net_mode)
 
         from PySide6.QtWidgets import QPushButton
         self.btn_close = QPushButton("×", self)
@@ -1080,6 +1358,8 @@ class DashWindow(QWidget):
         self._cfg["opacity"] = round(self.windowOpacity(), 2)
         self._cfg["topmost"] = bool(
             self.windowFlags() & Qt.WindowStaysOnTopHint)
+        self._cfg["needle"] = dict(self._needle)
+        self._cfg["net_mode"] = bool(self._net_mode)
         save_config(self._cfg)
 
     # --- 数据更新 ----------------------------------------------------------
@@ -1095,6 +1375,7 @@ class DashWindow(QWidget):
         self.cluster.set_value("npu_load", d.get("npu_load"))
         self.cluster.set_value("cpu_temp", d.get("cpu_temp"))
         self.cluster.set_value("npu_gpu_temp", d.get("gpu_temp"))
+        self.cluster.set_net(d.get("net_down"), d.get("net_up"))
         self.cluster.set_extra(d.get("mem_used_gb"), d.get("mem_load"),
                                d.get("disk_c_rate"), d.get("disk_d_rate"),
                                d.get("wifi_pct"), d.get("battery_pct"))
@@ -1103,11 +1384,15 @@ class DashWindow(QWidget):
                               or abs(t - self._last_temp) >= 0.5):
             self._last_temp = t
             self.tray.setIcon(make_temp_icon(t, self._th))
-            self.tray.setToolTip(
-                f"CPU {d.get('cpu_load') or 0:.0f}% {t:.0f}°C | "
-                f"GPU {d.get('gpu_load') or 0:.0f}% | "
-                f"NPU {d.get('npu_load') or 0:.0f}% | "
-                f"内存 {d.get('mem_load') or 0:.0f}%")
+            tip = (f"CPU {d.get('cpu_load') or 0:.0f}% {t:.0f}°C | "
+                   f"GPU {d.get('gpu_load') or 0:.0f}% | "
+                   f"内存 {d.get('mem_load') or 0:.0f}%")
+            if self._net_mode:
+                tip += (f" | ↓{fmt_rate(d.get('net_down'))} "
+                        f"↑{fmt_rate(d.get('net_up'))}")
+            else:
+                tip += f" | NPU {d.get('npu_load') or 0:.0f}%"
+            self.tray.setToolTip(tip)
 
     # --- 交互 --------------------------------------------------------------
 
@@ -1176,6 +1461,26 @@ class DashWindow(QWidget):
         hint = m_scale.addAction("悬停时 Ctrl+滚轮 微调")
         hint.setEnabled(False)
 
+        # 第 4 表：NPU 占用 / 网络速度
+        m_g4 = menu.addMenu("第 4 表显示")
+        for key, lab in (("npu", "NPU 占用"), ("net", "网络速度")):
+            act = m_g4.addAction(lab)
+            act.setCheckable(True)
+            act.setChecked(self._net_mode == (key == "net"))
+            act.triggered.connect(
+                lambda chk, k=key: self._set_net_mode(k == "net"))
+
+        # 每个仪表的指针样式开关
+        m_needle = menu.addMenu("指针样式")
+        for gkey, glab in GAUGE_LABELS.items():
+            act = m_needle.addAction(glab)
+            act.setCheckable(True)
+            act.setChecked(bool(self._needle.get(gkey)))
+            act.triggered.connect(
+                lambda chk, k=gkey: self._toggle_needle(k))
+        nhint = m_needle.addAction("勾选=指针样式，取消=弧形样式")
+        nhint.setEnabled(False)
+
         menu.addSeparator()
         a_op50 = menu.addAction("透明度 50%")
         a_op80 = menu.addAction("透明度 80%")
@@ -1201,6 +1506,21 @@ class DashWindow(QWidget):
 
     def _set_opacity(self, v):
         self.setWindowOpacity(v)
+        self._save_cfg()
+
+    def _set_net_mode(self, on):
+        """第 4 表切换为网络速度"""
+        self._net_mode = bool(on)
+        self.cluster.set_modes(self._needle, self._net_mode)
+        self._save_cfg()
+
+    def _toggle_needle(self, gkey):
+        """单个仪表的指针/弧形样式切换"""
+        if self._needle.get(gkey):
+            self._needle.pop(gkey, None)
+        else:
+            self._needle[gkey] = True
+        self.cluster.set_modes(self._needle, self._net_mode)
         self._save_cfg()
 
     def _toggle_visible(self):

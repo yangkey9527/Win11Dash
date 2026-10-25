@@ -249,6 +249,82 @@ class DiskIoReader:
 
 
 # ---------------------------------------------------------------------------
+# 网络吞吐读取器（PDH Network Interface 收/发字节率，免管理员）
+# ---------------------------------------------------------------------------
+
+class NetIoReader:
+    """网卡实时吞吐：下行(rx)/上行(tx)，全部网卡实例求和，单位 MB/s"""
+
+    def __init__(self):
+        self._query = ctypes.c_void_p()
+        self._counters = {}   # 'rx'/'tx' -> 计数器句柄
+        st = _pdh.PdhOpenQueryW(None, 0, ctypes.byref(self._query))
+        if st != 0:
+            self._query = None
+            return
+        for key, path in (
+                ("rx", "\\Network Interface(*)\\Bytes Received/sec"),
+                ("tx", "\\Network Interface(*)\\Bytes Sent/sec")):
+            c = ctypes.c_void_p()
+            if _pdh.PdhAddEnglishCounterW(self._query, path, 0,
+                                          ctypes.byref(c)) != 0:
+                continue
+            self._counters[key] = c
+        if not self._counters:
+            _pdh.PdhCloseQuery(self._query)
+            self._query = None
+            return
+        _pdh.PdhCollectQueryData(self._query)   # 首次采集建立速率基准
+
+    def available(self):
+        return self._query is not None
+
+    def _sum(self, counter):
+        """通配符计数器：枚举全部实例求和"""
+        buf_size = wintypes.DWORD(0)
+        item_count = wintypes.DWORD(0)
+        st = _pdh.PdhGetFormattedCounterArrayW(
+            counter, PDH_FMT_DOUBLE, ctypes.byref(buf_size),
+            ctypes.byref(item_count), None)
+        if st != PDH_MORE_DATA or buf_size.value == 0:
+            return None
+        buf = ctypes.create_string_buffer(buf_size.value)
+        st = _pdh.PdhGetFormattedCounterArrayW(
+            counter, PDH_FMT_DOUBLE, ctypes.byref(buf_size),
+            ctypes.byref(item_count), buf)
+        if st != 0:
+            return None
+        total = 0.0
+        found = False
+        item_size = ctypes.sizeof(_PDH_FMT_COUNTERVALUE_ITEM)
+        for i in range(item_count.value):
+            item = _PDH_FMT_COUNTERVALUE_ITEM.from_buffer_copy(
+                buf.raw[i * item_size:(i + 1) * item_size])
+            if item.FmtValue.CStatus == 0:
+                total += item.FmtValue.doubleValue
+                found = True
+        return total if found else None
+
+    def read(self):
+        """返回 {'rx': MB/s, 'tx': MB/s}"""
+        if not self._query:
+            return {}
+        if _pdh.PdhCollectQueryData(self._query) != 0:
+            return {}
+        out = {}
+        for key, c in self._counters.items():
+            v = self._sum(c)
+            if v is not None:
+                out[key] = v / (1024 * 1024)
+        return out
+
+    def close(self):
+        if self._query:
+            _pdh.PdhCloseQuery(self._query)
+            self._query = None
+
+
+# ---------------------------------------------------------------------------
 # WiFi 信号读取器（Native WiFi API，免管理员、无子进程，frozen 环境可靠）
 # ---------------------------------------------------------------------------
 
@@ -597,6 +673,11 @@ class HybridReader:
         except Exception as e:
             print(f"[sensor] DiskIo 初始化失败: {e}")
             self.diskio = None
+        try:
+            self.netio = NetIoReader()
+        except Exception as e:
+            print(f"[sensor] NetIo 初始化失败: {e}")
+            self.netio = None
         self._psutil_fallback = None
         self._slow_tick = 0
         self._slow = {"disk_c_rate": None, "disk_d_rate": None,
@@ -641,7 +722,8 @@ class HybridReader:
     def read(self):
         out = {"cpu_load": None, "cpu_temp": None,
                "gpu_load": None, "gpu_temp": None, "mem_load": None,
-               "cpu_clock": None, "mem_used_gb": None, "npu_load": None}
+               "cpu_clock": None, "mem_used_gb": None, "npu_load": None,
+               "net_down": None, "net_up": None}
 
         # LHM 主通道（管理员下含温度；非管理员有占用/频率）
         if self.lhm:
@@ -662,6 +744,17 @@ class HybridReader:
                 out["npu_load"] = self.npu.read()
             except Exception as e:
                 print(f"[sensor] NPU 读取失败: {e}")
+
+        # 网络吞吐（PDH，免管理员）
+        if self.netio:
+            try:
+                net = self.netio.read()
+                if "rx" in net:
+                    out["net_down"] = round(net["rx"], 3)
+                if "tx" in net:
+                    out["net_up"] = round(net["tx"], 3)
+            except Exception as e:
+                print(f"[sensor] 网络吞吐读取失败: {e}")
 
         # Core Temp 补位（非管理员 + Core Temp 运行时的温度来源）
         if out["cpu_temp"] is None or out["cpu_load"] is None:
@@ -706,6 +799,8 @@ class HybridReader:
             self.wifi.close()
         if self.diskio:
             self.diskio.close()
+        if self.netio:
+            self.netio.close()
         if self.lhm:
             self.lhm.close()
 

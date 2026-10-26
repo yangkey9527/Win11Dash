@@ -12,6 +12,7 @@ from ctypes import wintypes
 import os
 import struct
 import sys
+import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # PyInstaller 打包后 DLL 在 exe 同级 _internal/lib 或解压目录 lib
@@ -663,6 +664,21 @@ class HybridReader:
         except Exception as e:
             print(f"[sensor] NPU 初始化失败: {e}")
             self.npu = None
+        # PawnIO 缺失时温度不可用：自动安装并重建 LHM（每进程仅尝试一次）
+        # 安装需管理员权限，非提权（如 dev 运行）直接跳过
+        if self.lhm is not None and self._lhm_temp_missing() \
+                and ctypes.windll.shell32.IsUserAnAdmin():
+            try:
+                import installer
+                if installer.ensure_pawnio():
+                    try:
+                        self.lhm.close()
+                    except Exception:
+                        pass
+                    self.lhm = LhmReader()
+                    print("[sensor] PawnIO 安装后已重建 LHM")
+            except Exception as e:
+                print(f"[sensor] PawnIO 自动安装流程异常: {e}")
         try:
             self.wifi = WifiReader()
         except Exception as e:
@@ -686,6 +702,17 @@ class HybridReader:
         print(f"[sensor] LHM={'OK' if self.lhm else 'N/A'} "
               f"NPU={'OK' if self.npu and self.npu.available() else 'N/A'} "
               f"WiFi={'OK' if self.wifi and self.wifi.available() else 'N/A'}")
+
+    def _lhm_temp_missing(self) -> bool:
+        """连续多次读取均无 CPU 温度视为温度通道不可用"""
+        for _ in range(3):
+            try:
+                if self.lhm.read().get("cpu_temp") is not None:
+                    return False
+            except Exception:
+                pass
+            time.sleep(0.5)
+        return True
 
     def _read_slow(self):
         """慢速数据：磁盘速率 / WiFi 信号 / 电池电量（变化慢，低频刷新）"""

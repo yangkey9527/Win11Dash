@@ -18,6 +18,7 @@
 - **托盘常驻**：托盘图标实时显示 CPU 温度，鼠标悬停查看整体负载摘要
 - **无边框透明窗口**：支持拖动摆放、右键菜单切换置顶与透明度
 - **自动提权**：双击启动时自动请求管理员权限，无需手动操作
+- **温度零依赖**：内嵌 PawnIO 官方安装器，首次启动检测到驱动缺失时自动静默安装（数秒内完成），无需手动装 Core Temp 或其他外部工具
 - **开机自启**：通过任务计划程序实现，登录后静默以最高权限启动，不被 UAC 拦截
 
 ## 界面说明
@@ -43,6 +44,8 @@
 - Windows 11（Windows 10 21H2 及以上版本同样可以运行）
 - **管理员权限**：读取 CPU / GPU 温度必须提权，程序启动时会自动弹出 UAC
 - 源码运行需 Python 3.10+，另需 .NET Framework 4.7.2+（pythonnet 依赖）
+
+> 温度读取依赖 [PawnIO](https://github.com/namazso/PawnIO) 内核驱动。成品 exe 已内嵌官方安装器，首次启动若检测到未安装会自动装好；源码运行可在 `assets/` 放入 `PawnIO_setup.bin`（官方 setup 改名）获得同样能力。
 
 ## 快速开始
 
@@ -91,7 +94,7 @@ python -m PyInstaller --noconfirm Win11Dash.spec
 
 | 数据项 | 采集通道 | 需要管理员 |
 | --- | --- | --- |
-| CPU 温度 | LibreHardwareMonitor（CPU Package / Core 平均）→ MSR 0x19C 直读 → Core Temp 共享内存兜底 | 是 |
+| CPU 温度 | LibreHardwareMonitor（CPU Package / Core 平均）→ MSR 0x19C 直读（经 PawnIO 驱动，缺失时自动安装）→ Core Temp 共享内存兜底 | 是 |
 | CPU 占用 | LibreHardwareMonitor `CPU Total` → psutil 兜底 | 否 |
 | GPU 占用 | LibreHardwareMonitor D3D 引擎负载 | 否 |
 | GPU 温度 | LibreHardwareMonitor `GPU Core`，核显复用 CPU 温度 | 是 |
@@ -111,10 +114,12 @@ win11dash/
 ├── main.py                  # 入口，自动提权与异常日志
 ├── dashboard.py             # 窗口、五联表盘绘制、托盘与自启
 ├── sensor.py                # 传感器采集（LHM / PDH / wlanapi）
+├── installer.py             # PawnIO 检测与自动安装
 ├── Win11Dash.spec           # PyInstaller 打包配置
 ├── app.ico                  # 应用图标
 ├── 启动仪表盘.bat           # 源码方式快速启动
 ├── lib/                     # LibreHardwareMonitor 运行库（打包必需）
+├── assets/                  # PawnIO 官方安装器（打包时内嵌进 exe）
 ├── docs/
 │   ├── screenshot.png       # 界面截图
 │   └── 使用说明.md          # 详细操作与排障手册

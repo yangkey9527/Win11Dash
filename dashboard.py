@@ -311,8 +311,16 @@ LAYOUTS = {
     "v": {"label": "竖版", "w": 210, "h": 658, "gauges": GAUGES_V},
 }
 
-# 摸鱼金额条高度（开启后在仪表下方加一条）
-MOYU_STRIP = 34
+# 摸鱼金额条高度（开启后在仪表下方加一条，横竖版行高不同）
+def moyu_strip_height(layout_key):
+    return 54 if layout_key == "h" else 46
+
+
+def _month_workdays(y, m):
+    """当月工作日天数（周一~五，不考虑法定节假日调休）"""
+    return sum(
+        1 for d in range(1, calendar.monthrange(y, m)[1] + 1)
+        if datetime.date(y, m, d).weekday() < 5) or 22
 
 
 def moyu_amount(salary, now=None):
@@ -323,12 +331,20 @@ def moyu_amount(salary, now=None):
         now = datetime.datetime.now()
     if now.weekday() >= 5:
         return 0.0
-    wd = sum(
-        1 for d in range(1, calendar.monthrange(now.year, now.month)[1] + 1)
-        if datetime.date(now.year, now.month, d).weekday() < 5) or 22
+    wd = _month_workdays(now.year, now.month)
     t = now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
     frac = max(0.0, min(1.0, (t - 9 * 3600) / (9 * 3600)))
     return salary / wd * frac
+
+
+def moyu_month(salary, now=None):
+    """本月累计摸鱼金额：今天之前的工作日按整天计 + 今日实时"""
+    if now is None:
+        now = datetime.datetime.now()
+    day_sal = salary / _month_workdays(now.year, now.month)
+    total = sum(day_sal for d in range(1, now.day)
+                if datetime.date(now.year, now.month, d).weekday() < 5)
+    return total + moyu_amount(salary, now)
 
 # 菜单用：仪表 key -> 显示名
 GAUGE_LABELS = {g[0]: f"{g[6]} {g[7]}" for g in LAYOUTS["h"]["gauges"]}
@@ -535,43 +551,51 @@ class ClusterWidget(QWidget):
         p.end()
 
     def _draw_moyu_strip(self, p):
-        """底部摸鱼金额条：「您今天已经摸鱼赚到了：￥xxx.xxx元」"""
+        """底部摸鱼金额条（双行）：今日实时 + 本月累计。
+        颜色全部取自当前主题：次要文字=text_sub、金额=text_mem、
+        分隔线=stroke，横竖版字号行距分别适配。"""
         th = self._th
-        base_h = LAYOUTS[self._layout_key]["h"]
-        w = LAYOUTS[self._layout_key]["w"]
-        y0, y1 = base_h, base_h + MOYU_STRIP
+        key = self._layout_key
+        base_h = LAYOUTS[key]["h"]
+        w = LAYOUTS[key]["w"]
+        strip_h = moyu_strip_height(key)
+        y0 = base_h
         # 分隔线
-        line_c = C(th["dial_line"]) if th.get("dial_line") else QColor(255, 255, 255, 40)
-        p.setPen(QPen(line_c, 1))
+        p.setPen(QPen(C(th["stroke"]), 1))
         p.drawLine(QPointF(18, y0), QPointF(w - 18, y0))
-        # 金额
-        amt = moyu_amount(self._salary)
-        prefix, num, suffix = ("您今天已经摸鱼赚到了：",
-                               f"￥{amt:.4f}", "元")
-        fs = 15 if self._layout_key == "h" else 11
-        f_pre = QFont("Microsoft YaHei", -1)
-        f_pre.setPixelSize(fs)
-        f_num = QFont("Microsoft YaHei", -1)
-        f_num.setPixelSize(int(fs * 1.25))
-        f_num.setBold(True)
-        gold = QColor(255, 202, 58)
-        dim = QColor(255, 255, 255, 170)
-        p.setFont(f_pre)
-        w_pre = QFontMetricsF(p.font()).horizontalAdvance(prefix)
-        p.setFont(f_num)
-        fm_num = QFontMetricsF(p.font())
-        w_num = fm_num.horizontalAdvance(num)
-        w_suf = fm_num.horizontalAdvance(suffix)
-        x = (w - (w_pre + w_num + w_suf)) / 2
-        cy = (y0 + y1) / 2 + fs * 0.36   # 基线下移做视觉垂直居中
-        p.setPen(QPen(dim, 1))
-        p.setFont(f_pre)
-        p.drawText(QPointF(x, cy), prefix)
-        p.setPen(QPen(gold, 1))
-        p.setFont(f_num)
-        p.drawText(QPointF(x + w_pre, cy), num)
-        p.setFont(f_pre)
-        p.drawText(QPointF(x + w_pre + w_num, cy), suffix)
+
+        if key == "h":
+            fs, gap = 13, 21
+        else:
+            fs, gap = 10, 17
+        lines = [
+            ("您今天已经摸鱼赚到了：", f"￥{moyu_amount(self._salary):.4f}", "元"),
+            ("这个月已经赚了：", f"￥{moyu_month(self._salary):.2f}", "元"),
+        ]
+        dim = C(th["text_sub"])
+        gold = C(th["text_mem"])
+        for i, (prefix, num, suffix) in enumerate(lines):
+            cy = y0 + strip_h / 2 + (i - 0.5) * gap + fs * 0.36
+            f_pre = QFont("Microsoft YaHei", -1)
+            f_pre.setPixelSize(fs)
+            f_num = QFont("Microsoft YaHei", -1)
+            f_num.setPixelSize(int(fs * 1.25))
+            f_num.setBold(True)
+            p.setFont(f_pre)
+            w_pre = QFontMetricsF(p.font()).horizontalAdvance(prefix)
+            p.setFont(f_num)
+            fm_num = QFontMetricsF(p.font())
+            w_num = fm_num.horizontalAdvance(num)
+            w_suf = fm_num.horizontalAdvance(suffix)
+            x = (w - (w_pre + w_num + w_suf)) / 2
+            p.setPen(QPen(dim, 1))
+            p.setFont(f_pre)
+            p.drawText(QPointF(x, cy), prefix)
+            p.setPen(QPen(gold, 1))
+            p.setFont(f_num)
+            p.drawText(QPointF(x + w_pre, cy), num)
+            p.setFont(f_pre)
+            p.drawText(QPointF(x + w_pre + w_num, cy), suffix)
 
     def _draw_neon_overhead(self, p):
         """氖光光源：横版=第二/第四表上方向下扇形辐射；
@@ -1518,7 +1542,8 @@ class DashWindow(QWidget):
 
     def _apply_layout(self, keep_center=False):
         L = LAYOUTS[self._layout_key]
-        bw, bh = L["w"], L["h"] + (MOYU_STRIP if self._moyu else 0)
+        bw, bh = L["w"], L["h"] + (moyu_strip_height(self._layout_key)
+                                   if self._moyu else 0)
         s = self._scale
         old_center = self.frameGeometry().center() if keep_center else None
         self.setFixedSize(round(bw * s), round(bh * s))
@@ -1814,7 +1839,8 @@ class DashWindow(QWidget):
         th = self._th
         rect = QRectF(2, 2, LAYOUTS[self._layout_key]["w"] - 4,
                       LAYOUTS[self._layout_key]["h"]
-                      + (MOYU_STRIP if self._moyu else 0) - 4)
+                      + (moyu_strip_height(self._layout_key)
+                         if self._moyu else 0) - 4)
         grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
         g0, g1 = th["win_grad"]
         grad.setColorAt(0, C(g0))

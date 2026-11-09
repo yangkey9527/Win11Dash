@@ -15,11 +15,13 @@ import subprocess
 import sys
 import time
 from PySide6.QtWidgets import (QApplication, QWidget, QSystemTrayIcon, QMenu,
-                               QInputDialog)
+                               QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                               QLineEdit, QPushButton)
 from PySide6.QtCore import Qt, QTimer, QRectF, QPointF
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QFontMetricsF, QLinearGradient, QConicalGradient,
-    QRadialGradient, QPen, QBrush, QAction, QIcon, QPixmap, QPainterPath
+    QRadialGradient, QPen, QBrush, QAction, QIcon, QPixmap, QPainterPath,
+    QIntValidator
 )
 
 from config import load_config, save_config
@@ -545,7 +547,7 @@ class ClusterWidget(QWidget):
         # 金额
         amt = moyu_amount(self._salary)
         prefix, num, suffix = ("您今天已经摸鱼赚到了：",
-                               f"￥{amt:.3f}", "元")
+                               f"￥{amt:.4f}", "元")
         fs = 15 if self._layout_key == "h" else 11
         f_pre = QFont("Microsoft YaHei", -1)
         f_pre.setPixelSize(fs)
@@ -1370,6 +1372,76 @@ class SensorWorker:
 
 
 # ---------------------------------------------------------------------------
+# 设置月薪对话框（自绘无边框置顶）
+# 系统 QInputDialog 在本应用（无边框置顶 Tool 主窗）下实测不渲染（用户不可见），
+# 故采用与主窗口相同的窗口方案自绘。
+# ---------------------------------------------------------------------------
+
+class SalaryDialog(QDialog):
+    def __init__(self, parent, salary, th):
+        super().__init__(parent,
+                         Qt.Dialog | Qt.FramelessWindowHint
+                         | Qt.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setModal(True)
+        self.setFixedSize(280, 138)
+        self._th = th
+
+        lab = QLabel("月薪（元/月）：")
+        lab.setStyleSheet("color: rgba(255,255,255,205); font-size: 13px;")
+        self.edit = QLineEdit(str(int(salary)))
+        self.edit.setValidator(QIntValidator(100, 10000000, self))
+        self.edit.setStyleSheet(
+            "color: #ffca3a; background: rgba(255,255,255,14);"
+            " border: 1px solid rgba(255,255,255,60); border-radius: 6px;"
+            " padding: 6px 8px; font-size: 15px; font-weight: bold;"
+            " selection-background-color: rgba(255,202,58,60);")
+        self.edit.selectAll()
+
+        btn_style = (
+            "QPushButton { color: rgba(255,255,255,220);"
+            " background: rgba(255,255,255,18); border: none;"
+            " border-radius: 6px; padding: 7px 0; font-size: 13px; }"
+            "QPushButton:hover { background: rgba(255,255,255,32); }"
+            "QPushButton:pressed { background: rgba(255,255,255,46); }")
+        btn_ok = QPushButton("确定")
+        btn_ok.setStyleSheet(btn_style)
+        btn_ok.setDefault(True)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.setStyleSheet(btn_style)
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel.clicked.connect(self.reject)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(8)
+        lay.addWidget(lab)
+        lay.addWidget(self.edit)
+        brow = QHBoxLayout()
+        brow.setSpacing(8)
+        brow.addWidget(btn_ok, 1)
+        brow.addWidget(btn_cancel, 1)
+        lay.addLayout(brow)
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        grad = QLinearGradient(r.topLeft(), r.bottomRight())
+        g0, g1 = self._th["win_grad"]
+        grad.setColorAt(0, C(g0))
+        grad.setColorAt(1, C(g1))
+        p.setBrush(QBrush(grad))
+        p.setPen(QPen(C(self._th["win_border"]), 1))
+        p.drawRoundedRect(r, 12, 12)
+
+    def value(self):
+        try:
+            return float(self.edit.text())
+        except (TypeError, ValueError):
+            return None
+
+
 # 主窗口
 # ---------------------------------------------------------------------------
 
@@ -1699,14 +1771,16 @@ class DashWindow(QWidget):
         self._save_cfg()
 
     def _set_salary(self):
-        """设置月薪（元）"""
-        val, ok = QInputDialog.getDouble(
-            self, "设置月薪", "月薪（元/月）：",
-            self._salary, 100, 10000000, 0)
-        if ok:
-            self._salary = float(val)
-            self.cluster.set_moyu(self._moyu, self._salary)
-            self._save_cfg()
+        """设置月薪（元）。自绘置顶对话框，居中于主窗口。"""
+        dlg = SalaryDialog(self, self._salary, self._th)
+        c = self.frameGeometry().center()
+        dlg.move(c.x() - dlg.width() // 2, c.y() - dlg.height() // 2)
+        if dlg.exec():
+            v = dlg.value()
+            if v is not None:
+                self._salary = max(100.0, min(10000000.0, v))
+                self.cluster.set_moyu(self._moyu, self._salary)
+                self._save_cfg()
 
     def _toggle_visible(self):
         self.setVisible(not self.isVisible())

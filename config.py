@@ -7,6 +7,8 @@ import json
 import os
 import tempfile
 
+APP_VERSION = "1.4.2"  # 发布版本号（dist 产物命名 / Release 用）
+
 CONF_DIR = os.path.join(
     os.environ.get("APPDATA", os.path.expanduser("~")), "Win11Dash")
 CONF_PATH = os.path.join(CONF_DIR, "config.json")

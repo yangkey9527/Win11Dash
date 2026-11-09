@@ -56,13 +56,21 @@ a.datas = TOC([
 
 pyz = PYZ(a.pure)
 
+import os
+import sys
+
+spec_dir = os.path.dirname(os.path.abspath(SPEC))
+if spec_dir not in sys.path:
+    sys.path.insert(0, spec_dir)
+from config import APP_VERSION  # noqa: E402  dist 产物名带版本号
+
 exe = EXE(
     pyz,
     a.scripts,
     a.binaries,
     a.datas,
     [],
-    name='Win11Dash',
+    name=f'Win11Dash-v{APP_VERSION}',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

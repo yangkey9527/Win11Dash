@@ -6,17 +6,20 @@ Win11 Dash — 五连表桌面悬浮仪表盘（帕拉梅拉摆放，发光弧�
 竖版（210x660）: 上→下同样五表纵向层叠，左上四行数据槽（C/D盘、WiFi、电量）
 支持：横/竖布局切换、三套主题（暗黑/浅色/琥珀）、矢量无级缩放、配置持久化
 """
+import calendar
 import ctypes
+import datetime
 import math
 import os
 import subprocess
 import sys
 import time
-from PySide6.QtWidgets import QApplication, QWidget, QSystemTrayIcon, QMenu
+from PySide6.QtWidgets import (QApplication, QWidget, QSystemTrayIcon, QMenu,
+                               QInputDialog)
 from PySide6.QtCore import Qt, QTimer, QRectF, QPointF
 from PySide6.QtGui import (
-    QPainter, QColor, QFont, QLinearGradient, QConicalGradient, QRadialGradient,
-    QPen, QBrush, QAction, QIcon, QPixmap, QPainterPath
+    QPainter, QColor, QFont, QFontMetricsF, QLinearGradient, QConicalGradient,
+    QRadialGradient, QPen, QBrush, QAction, QIcon, QPixmap, QPainterPath
 )
 
 from config import load_config, save_config
@@ -306,6 +309,25 @@ LAYOUTS = {
     "v": {"label": "竖版", "w": 210, "h": 658, "gauges": GAUGES_V},
 }
 
+# 摸鱼金额条高度（开启后在仪表下方加一条）
+MOYU_STRIP = 34
+
+
+def moyu_amount(salary, now=None):
+    """今日摸鱼金额：日薪 = 月薪/当月工作日天数（周一~五），
+    每天 9:00~18:00 线性累计到日薪（8 小时工作 + 1 小时午休也算在岗），
+    非工作日 / 上班前为 0，下班后封顶日薪。"""
+    if now is None:
+        now = datetime.datetime.now()
+    if now.weekday() >= 5:
+        return 0.0
+    wd = sum(
+        1 for d in range(1, calendar.monthrange(now.year, now.month)[1] + 1)
+        if datetime.date(now.year, now.month, d).weekday() < 5) or 22
+    t = now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
+    frac = max(0.0, min(1.0, (t - 9 * 3600) / (9 * 3600)))
+    return salary / wd * frac
+
 # 菜单用：仪表 key -> 显示名
 GAUGE_LABELS = {g[0]: f"{g[6]} {g[7]}" for g in LAYOUTS["h"]["gauges"]}
 
@@ -382,6 +404,9 @@ class ClusterWidget(QWidget):
         self._needle = dict(needle or {})
         # 第 4 表切换为网络速度
         self._net_mode = bool(net_mode)
+        # 摸鱼金额
+        self._moyu = False
+        self._salary = 10000.0
         self._net_cur = {"down": None, "up": None}
         self._net_tgt = {"down": 0.0, "up": 0.0}
         self._net_peak = {"down": 2.0, "up": 1.0}
@@ -403,6 +428,12 @@ class ClusterWidget(QWidget):
         """指针样式 / 第4表网络模式切换"""
         self._needle = dict(needle or {})
         self._net_mode = bool(net_mode)
+        self.update()
+
+    def set_moyu(self, on, salary):
+        """摸鱼金额显示开关与月薪"""
+        self._moyu = bool(on)
+        self._salary = float(salary)
         self.update()
 
     def set_net(self, down, up):
@@ -467,8 +498,8 @@ class ClusterWidget(QWidget):
                 self._net_cur[k] += d * 0.18
                 dirty = True
         if dirty or self.extra.get("battery_state") in (
-                "charging", "discharging"):
-            self.update()   # 充放电流光需要持续重绘
+                "charging", "discharging") or self._moyu:
+            self.update()   # 充放电流光 / 摸鱼金额需要持续重绘
 
     # -- 绘制 -------------------------------------------------------------
 
@@ -497,7 +528,48 @@ class ClusterWidget(QWidget):
             self._draw_side_widgets_h(p)
         else:
             self._draw_side_widgets_v(p)
+        if self._moyu:
+            self._draw_moyu_strip(p)
         p.end()
+
+    def _draw_moyu_strip(self, p):
+        """底部摸鱼金额条：「您今天已经摸鱼赚到了：￥xxx.xxx元」"""
+        th = self._th
+        base_h = LAYOUTS[self._layout_key]["h"]
+        w = LAYOUTS[self._layout_key]["w"]
+        y0, y1 = base_h, base_h + MOYU_STRIP
+        # 分隔线
+        line_c = C(th["dial_line"]) if th.get("dial_line") else QColor(255, 255, 255, 40)
+        p.setPen(QPen(line_c, 1))
+        p.drawLine(QPointF(18, y0), QPointF(w - 18, y0))
+        # 金额
+        amt = moyu_amount(self._salary)
+        prefix, num, suffix = ("您今天已经摸鱼赚到了：",
+                               f"￥{amt:.3f}", "元")
+        fs = 15 if self._layout_key == "h" else 11
+        f_pre = QFont("Microsoft YaHei", -1)
+        f_pre.setPixelSize(fs)
+        f_num = QFont("Microsoft YaHei", -1)
+        f_num.setPixelSize(int(fs * 1.25))
+        f_num.setBold(True)
+        gold = QColor(255, 202, 58)
+        dim = QColor(255, 255, 255, 170)
+        p.setFont(f_pre)
+        w_pre = QFontMetricsF(p.font()).horizontalAdvance(prefix)
+        p.setFont(f_num)
+        fm_num = QFontMetricsF(p.font())
+        w_num = fm_num.horizontalAdvance(num)
+        w_suf = fm_num.horizontalAdvance(suffix)
+        x = (w - (w_pre + w_num + w_suf)) / 2
+        cy = (y0 + y1) / 2 + fs * 0.36   # 基线下移做视觉垂直居中
+        p.setPen(QPen(dim, 1))
+        p.setFont(f_pre)
+        p.drawText(QPointF(x, cy), prefix)
+        p.setPen(QPen(gold, 1))
+        p.setFont(f_num)
+        p.drawText(QPointF(x + w_pre, cy), num)
+        p.setFont(f_pre)
+        p.drawText(QPointF(x + w_pre + w_num, cy), suffix)
 
     def _draw_neon_overhead(self, p):
         """氖光光源：横版=第二/第四表上方向下扇形辐射；
@@ -1315,6 +1387,8 @@ class DashWindow(QWidget):
         self._th = THEMES[self._theme_key]
         self._needle = dict(cfg.get("needle") or {})
         self._net_mode = bool(cfg.get("net_mode", False))
+        self._moyu = bool(cfg.get("moyu", False))
+        self._salary = float(cfg.get("salary", 10000.0))
         self.setWindowFlags(
             Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -1322,6 +1396,7 @@ class DashWindow(QWidget):
         self.cluster = ClusterWidget(self, self._layout_key,
                                      self._theme_key, self._scale,
                                      self._needle, self._net_mode)
+        self.cluster.set_moyu(self._moyu, self._salary)
 
         from PySide6.QtWidgets import QPushButton
         self.btn_close = QPushButton("×", self)
@@ -1371,7 +1446,7 @@ class DashWindow(QWidget):
 
     def _apply_layout(self, keep_center=False):
         L = LAYOUTS[self._layout_key]
-        bw, bh = L["w"], L["h"]
+        bw, bh = L["w"], L["h"] + (MOYU_STRIP if self._moyu else 0)
         s = self._scale
         old_center = self.frameGeometry().center() if keep_center else None
         self.setFixedSize(round(bw * s), round(bh * s))
@@ -1449,6 +1524,8 @@ class DashWindow(QWidget):
             self.windowFlags() & Qt.WindowStaysOnTopHint)
         self._cfg["needle"] = dict(self._needle)
         self._cfg["net_mode"] = bool(self._net_mode)
+        self._cfg["moyu"] = bool(self._moyu)
+        self._cfg["salary"] = float(self._salary)
         save_config(self._cfg)
 
     # --- 数据更新 ----------------------------------------------------------
@@ -1566,6 +1643,15 @@ class DashWindow(QWidget):
         a_needle.setChecked(bool(self._needle))
         a_needle.triggered.connect(lambda chk: self._set_needle_all(chk))
 
+        # 摸鱼金额
+        m_moyu = menu.addMenu("摸鱼金额")
+        a_moyu = m_moyu.addAction("开启显示")
+        a_moyu.setCheckable(True)
+        a_moyu.setChecked(self._moyu)
+        a_moyu.triggered.connect(lambda chk: self._set_moyu(chk))
+        a_sal = m_moyu.addAction("设置月薪…")
+        a_sal.triggered.connect(self._set_salary)
+
         menu.addSeparator()
         a_op50 = menu.addAction("透明度 50%")
         a_op80 = menu.addAction("透明度 80%")
@@ -1605,6 +1691,23 @@ class DashWindow(QWidget):
         self.cluster.set_modes(self._needle, self._net_mode)
         self._save_cfg()
 
+    def _set_moyu(self, on):
+        """摸鱼金额显示开关（窗口高度随之增减）"""
+        self._moyu = bool(on)
+        self.cluster.set_moyu(self._moyu, self._salary)
+        self._apply_layout(keep_center=True)
+        self._save_cfg()
+
+    def _set_salary(self):
+        """设置月薪（元）"""
+        val, ok = QInputDialog.getDouble(
+            self, "设置月薪", "月薪（元/月）：",
+            self._salary, 100, 10000000, 0)
+        if ok:
+            self._salary = float(val)
+            self.cluster.set_moyu(self._moyu, self._salary)
+            self._save_cfg()
+
     def _toggle_visible(self):
         self.setVisible(not self.isVisible())
 
@@ -1636,7 +1739,8 @@ class DashWindow(QWidget):
         p.scale(self._scale, self._scale)   # 与表盘同一逻辑坐标系
         th = self._th
         rect = QRectF(2, 2, LAYOUTS[self._layout_key]["w"] - 4,
-                      LAYOUTS[self._layout_key]["h"] - 4)
+                      LAYOUTS[self._layout_key]["h"]
+                      + (MOYU_STRIP if self._moyu else 0) - 4)
         grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
         g0, g1 = th["win_grad"]
         grad.setColorAt(0, C(g0))

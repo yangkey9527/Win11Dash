@@ -21,6 +21,8 @@ DEFAULTS = {
     "pos_v": None,      # [x, y] 竖版窗口位置
     "needle": {},       # {仪表 key: True} 指针样式（缺省为弧形）
     "net_mode": False,  # 第 4 表显示网络速度（否则显示 NPU 占用）
+    "moyu": False,      # 摸鱼金额显示开关
+    "salary": 10000.0,  # 月薪（元），摸鱼金额计算用
 }
 
 GAUGE_KEYS = ("cpu_temp", "gpu_load", "cpu_load", "npu_load",
@@ -62,6 +64,11 @@ def load_config():
         nd = {}
     cfg["needle"] = {k: bool(v) for k, v in nd.items() if k in GAUGE_KEYS}
     cfg["net_mode"] = bool(cfg["net_mode"])
+    cfg["moyu"] = bool(cfg["moyu"])
+    try:
+        cfg["salary"] = min(10_000_000.0, max(100.0, float(cfg["salary"])))
+    except Exception:
+        cfg["salary"] = 10000.0
     return cfg
 
 

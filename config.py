@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """
 配置持久化：%APPDATA%\Win11Dash\config.json
 保存布局/主题/缩放/位置/透明度/置顶，重启后完整恢复。
@@ -7,7 +7,7 @@ import json
 import os
 import tempfile
 
-APP_VERSION = "1.4.2"  # 发布版本号（dist 产物命名 / Release 用）
+APP_VERSION = "1.4.3"  # 发布版本号（dist 产物命名 / Release 用）
 
 CONF_DIR = os.path.join(
     os.environ.get("APPDATA", os.path.expanduser("~")), "Win11Dash")
@@ -85,3 +85,4 @@ def save_config(cfg):
         os.replace(tmp, CONF_PATH)
     except Exception:
         pass
+

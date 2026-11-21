@@ -17,6 +17,7 @@ import time
 from PySide6.QtWidgets import (QApplication, QWidget, QSystemTrayIcon, QMenu,
                                QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton)
+import quotes
 from PySide6.QtCore import Qt, QTimer, QRectF, QPointF
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QFontMetricsF, QLinearGradient, QConicalGradient,
@@ -311,9 +312,13 @@ LAYOUTS = {
     "v": {"label": "竖版", "w": 210, "h": 658, "gauges": GAUGES_V},
 }
 
-# 摸鱼金额条高度（开启后在仪表下方加一条，横竖版行高不同）
-def moyu_strip_height(layout_key):
-    return 54 if layout_key == "h" else 46
+# 摸鱼金额条高度（开启后在仪表下方加一条，横竖版行高不同；
+# 带标语模式：额外 +22 / +18 给第三行标语用）
+def moyu_strip_height(layout_key, with_quote=True):
+    base = 54 if layout_key == "h" else 46
+    if with_quote:
+        base += 22 if layout_key == "h" else 18
+    return base
 
 
 def _month_workdays(y, m):
@@ -425,6 +430,10 @@ class ClusterWidget(QWidget):
         # 摸鱼金额
         self._moyu = False
         self._salary = 10000.0
+        # 摸鱼标语（第三行）
+        self._quote = quotes.pick_quote(True, set())
+        self._quote_recent = {self._quote}
+        self._quote_next = time.time() + 120   # 每 120 秒换一次
         self._net_cur = {"down": None, "up": None}
         self._net_tgt = {"down": 0.0, "up": 0.0}
         self._net_peak = {"down": 2.0, "up": 1.0}
@@ -500,6 +509,18 @@ class ClusterWidget(QWidget):
                     50.0, self._disk_peak[L] * 0.98, float(v))
 
     def _tick(self):
+        # 标语每 120 秒刷新一次
+        if time.time() >= self._quote_next:
+            is_workday = datetime.datetime.now().weekday() < 5
+            q = quotes.pick_quote(is_workday, self._quote_recent)
+            self._quote = q
+            self._quote_recent.add(q)
+            if len(self._quote_recent) > quotes._MIN_POOL:
+                # 超过去重窗口大小，随机丢一个最老的
+                self._quote_recent.clear()
+                self._quote_recent.add(q)
+            self._quote_next = time.time() + 120
+            self.update()
         dirty = False
         for k, cur in self._cur.items():
             if cur is None:
@@ -551,14 +572,14 @@ class ClusterWidget(QWidget):
         p.end()
 
     def _draw_moyu_strip(self, p):
-        """底部摸鱼金额条（双行）：今日实时 + 本月累计。
-        颜色全部取自当前主题：次要文字=text_sub、金额=text_mem、
-        分隔线=stroke，横竖版字号行距分别适配。"""
+        """底部摸鱼金额条（三行）：今日实时 + 本月累计 + 随机标语。
+        颜色取自主题：金额=text_mem、文字=text_sub、分隔线=stroke。
+        金额两行保持原位置（相对分隔线 y0 偏移），标语行在最底部独立居中。"""
         th = self._th
         key = self._layout_key
         base_h = LAYOUTS[key]["h"]
         w = LAYOUTS[key]["w"]
-        strip_h = moyu_strip_height(key)
+        strip_h = moyu_strip_height(key, True)
         y0 = base_h
         # 分隔线
         p.setPen(QPen(C(th["stroke"]), 1))
@@ -566,8 +587,10 @@ class ClusterWidget(QWidget):
 
         if key == "h":
             fs, gap = 13, 21
+            quote_fs = 11
         else:
             fs, gap = 10, 17
+            quote_fs = 9
         lines = [
             ("您今天已经摸鱼赚到了：", f"￥{moyu_amount(self._salary):.4f}", "元"),
             ("这个月已经赚了：", f"￥{moyu_month(self._salary):.2f}", "元"),
@@ -575,7 +598,8 @@ class ClusterWidget(QWidget):
         dim = C(th["text_sub"])
         gold = C(th["text_mem"])
         for i, (prefix, num, suffix) in enumerate(lines):
-            cy = y0 + strip_h / 2 + (i - 0.5) * gap + fs * 0.36
+            # 金额两行 cy 相对 y0 偏移不变，避免因 strip_h 增加而下移
+            cy = y0 + 20 + i * gap + fs * 0.36
             f_pre = QFont("Microsoft YaHei", -1)
             f_pre.setPixelSize(fs)
             f_num = QFont("Microsoft YaHei", -1)
@@ -596,6 +620,17 @@ class ClusterWidget(QWidget):
             p.drawText(QPointF(x + w_pre, cy), num)
             p.setFont(f_pre)
             p.drawText(QPointF(x + w_pre + w_num, cy), suffix)
+
+        # 第三行标语（最底部，次要文字色，居中）
+        f_q = QFont("Microsoft YaHei", -1)
+        f_q.setPixelSize(quote_fs)
+        p.setFont(f_q)
+        fm_q = QFontMetricsF(p.font())
+        w_q = fm_q.horizontalAdvance(self._quote)
+        # 垂直位置：底部留约 1.25 * quote_fs 给完整字高，cy 为基线
+        cy_q = y0 + strip_h - max(quote_fs + 3, 13)
+        p.setPen(QPen(dim, 1))
+        p.drawText(QPointF((w - w_q) / 2, cy_q), self._quote)
 
     def _draw_neon_overhead(self, p):
         """氖光光源：横版=第二/第四表上方向下扇形辐射；
@@ -1542,7 +1577,7 @@ class DashWindow(QWidget):
 
     def _apply_layout(self, keep_center=False):
         L = LAYOUTS[self._layout_key]
-        bw, bh = L["w"], L["h"] + (moyu_strip_height(self._layout_key)
+        bw, bh = L["w"], L["h"] + (moyu_strip_height(self._layout_key, True)
                                    if self._moyu else 0)
         s = self._scale
         old_center = self.frameGeometry().center() if keep_center else None
@@ -1839,7 +1874,7 @@ class DashWindow(QWidget):
         th = self._th
         rect = QRectF(2, 2, LAYOUTS[self._layout_key]["w"] - 4,
                       LAYOUTS[self._layout_key]["h"]
-                      + (moyu_strip_height(self._layout_key)
+                      + (moyu_strip_height(self._layout_key, True)
                          if self._moyu else 0) - 4)
         grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
         g0, g1 = th["win_grad"]

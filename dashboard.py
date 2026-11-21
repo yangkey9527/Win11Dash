@@ -318,7 +318,7 @@ LAYOUTS = {
 def moyu_strip_height(layout_key):
     if layout_key == "h":
         return 54   # 2 行，标语右对齐第二行
-    return 64       # 3 行，标语独立一行
+    return 74       # 3 行，标语独立一行（gap 18 + quote_fs 11 需 2 行金额+标语独立）
 
 
 def _month_workdays(y, m):
@@ -592,7 +592,7 @@ class ClusterWidget(QWidget):
             right_pad = 14  # 标语距右边框
             mid_gap = 10    # 标语距金额尾部
         else:
-            fs, gap = 10, 17
+            fs, gap = 10, 18
             quote_fs = 11
         lines = [
             ("您今天已经摸鱼赚到了：", f"￥{moyu_amount(self._salary):.4f}", "元"),
@@ -669,8 +669,8 @@ class ClusterWidget(QWidget):
             p.setFont(f_q)
             fm_q = QFontMetricsF(p.font())
             w_q = fm_q.horizontalAdvance(self._quote)
-            # 底部留够字高防裁
-            cy_q = y0 + strip_h - max(quote_fs + 3, 13)
+            # 标语字底离 strip 底 3px，确保字顶不碰第二行金额字底
+            cy_q = y0 + strip_h - quote_fs - 3
             p.setPen(QPen(dim, 1))
             p.drawText(QPointF((w - w_q) / 2, cy_q), self._quote)
 

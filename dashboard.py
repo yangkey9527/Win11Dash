@@ -588,12 +588,12 @@ class ClusterWidget(QWidget):
 
         if key == "h":
             fs, gap = 13, 21
-            quote_fs = 10   # 横版标语略小，与金额做层级区分
+            quote_fs = 13   # 横版标语同金额行字号，一眼可见
             right_pad = 14  # 标语距右边框
             mid_gap = 10    # 标语距金额尾部
         else:
             fs, gap = 10, 17
-            quote_fs = 9
+            quote_fs = 11
         lines = [
             ("您今天已经摸鱼赚到了：", f"￥{moyu_amount(self._salary):.4f}", "元"),
             ("这个月已经赚了：", f"￥{moyu_month(self._salary):.2f}", "元"),

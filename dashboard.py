@@ -313,12 +313,12 @@ LAYOUTS = {
 }
 
 # 摸鱼金额条高度（开启后在仪表下方加一条，横竖版行高不同；
-# 带标语模式：额外 +22 / +18 给第三行标语用）
-def moyu_strip_height(layout_key, with_quote=True):
-    base = 54 if layout_key == "h" else 46
-    if with_quote:
-        base += 22 if layout_key == "h" else 18
-    return base
+# 标语与金额共 2 行（横版：标语右对齐到第二行末尾，省独立一行）；
+# 竖版空间窄才额外加一行给标语）
+def moyu_strip_height(layout_key):
+    if layout_key == "h":
+        return 54   # 2 行，标语右对齐第二行
+    return 64       # 3 行，标语独立一行
 
 
 def _month_workdays(y, m):
@@ -572,14 +572,15 @@ class ClusterWidget(QWidget):
         p.end()
 
     def _draw_moyu_strip(self, p):
-        """底部摸鱼金额条（三行）：今日实时 + 本月累计 + 随机标语。
-        颜色取自主题：金额=text_mem、文字=text_sub、分隔线=stroke。
-        金额两行保持原位置（相对分隔线 y0 偏移），标语行在最底部独立居中。"""
+        """底部摸鱼金额条：
+        横版：2 行（今日居中 + 本月居中，标语右对齐第二行末尾）
+        竖版：3 行（今日 + 本月 + 标语独立居中）
+        颜色取自主题：金额=text_mem、文字/标语=text_sub、分隔线=stroke。"""
         th = self._th
         key = self._layout_key
         base_h = LAYOUTS[key]["h"]
         w = LAYOUTS[key]["w"]
-        strip_h = moyu_strip_height(key, True)
+        strip_h = moyu_strip_height(key)
         y0 = base_h
         # 分隔线
         p.setPen(QPen(C(th["stroke"]), 1))
@@ -587,7 +588,9 @@ class ClusterWidget(QWidget):
 
         if key == "h":
             fs, gap = 13, 21
-            quote_fs = 11
+            quote_fs = 10   # 横版标语略小，与金额做层级区分
+            right_pad = 14  # 标语距右边框
+            mid_gap = 10    # 标语距金额尾部
         else:
             fs, gap = 10, 17
             quote_fs = 9
@@ -597,8 +600,24 @@ class ClusterWidget(QWidget):
         ]
         dim = C(th["text_sub"])
         gold = C(th["text_mem"])
+
+        # 预计算横版第二行右侧标语的位置和宽度
+        quote_region_end = None
+        if key == "h":
+            f_q = QFont("Microsoft YaHei", -1)
+            f_q.setPixelSize(quote_fs)
+            p.setFont(f_q)
+            fm_q = QFontMetricsF(p.font())
+            q_w = fm_q.horizontalAdvance(self._quote)
+            # 标语从右边缘往左排
+            q_x = w - right_pad - q_w
+            quote_region_end = q_x - mid_gap   # 金额尾部不能超过这个 x
+        else:
+            f_q = None
+            fm_q = None
+            q_x = 0
+
         for i, (prefix, num, suffix) in enumerate(lines):
-            # 金额两行 cy 相对 y0 偏移不变，避免因 strip_h 增加而下移
             cy = y0 + 20 + i * gap + fs * 0.36
             f_pre = QFont("Microsoft YaHei", -1)
             f_pre.setPixelSize(fs)
@@ -611,7 +630,23 @@ class ClusterWidget(QWidget):
             fm_num = QFontMetricsF(p.font())
             w_num = fm_num.horizontalAdvance(num)
             w_suf = fm_num.horizontalAdvance(suffix)
-            x = (w - (w_pre + w_num + w_suf)) / 2
+            amount_total_w = w_pre + w_num + w_suf
+
+            if key == "h" and i == 1 and quote_region_end is not None:
+                # 第二行横版：金额居中到「左边界 ~ quote_region_end」范围内
+                # 取这个可用区间的中心
+                avail_left = 18    # 左边距
+                avail_right = quote_region_end
+                avail_w = avail_right - avail_left
+                # 如果金额本身就比可用区间还宽（极端情况：标语 + 金额都超长）
+                # 那就退化为全宽居中，标语会被画到金额后面一点点（可接受）
+                if amount_total_w <= avail_w:
+                    x = avail_left + (avail_w - amount_total_w) / 2
+                else:
+                    x = (w - amount_total_w) / 2
+            else:
+                x = (w - amount_total_w) / 2
+
             p.setPen(QPen(dim, 1))
             p.setFont(f_pre)
             p.drawText(QPointF(x, cy), prefix)
@@ -621,16 +656,23 @@ class ClusterWidget(QWidget):
             p.setFont(f_pre)
             p.drawText(QPointF(x + w_pre + w_num, cy), suffix)
 
-        # 第三行标语（最底部，次要文字色，居中）
-        f_q = QFont("Microsoft YaHei", -1)
-        f_q.setPixelSize(quote_fs)
-        p.setFont(f_q)
-        fm_q = QFontMetricsF(p.font())
-        w_q = fm_q.horizontalAdvance(self._quote)
-        # 垂直位置：底部留约 1.25 * quote_fs 给完整字高，cy 为基线
-        cy_q = y0 + strip_h - max(quote_fs + 3, 13)
-        p.setPen(QPen(dim, 1))
-        p.drawText(QPointF((w - w_q) / 2, cy_q), self._quote)
+            # 横版第二行末尾右对齐标语
+            if key == "h" and i == 1:
+                p.setPen(QPen(dim, 1))
+                p.setFont(f_q)
+                p.drawText(QPointF(q_x, cy), self._quote)
+
+        # 竖版：标语独立第三行，居中
+        if key == "v":
+            f_q = QFont("Microsoft YaHei", -1)
+            f_q.setPixelSize(quote_fs)
+            p.setFont(f_q)
+            fm_q = QFontMetricsF(p.font())
+            w_q = fm_q.horizontalAdvance(self._quote)
+            # 底部留够字高防裁
+            cy_q = y0 + strip_h - max(quote_fs + 3, 13)
+            p.setPen(QPen(dim, 1))
+            p.drawText(QPointF((w - w_q) / 2, cy_q), self._quote)
 
     def _draw_neon_overhead(self, p):
         """氖光光源：横版=第二/第四表上方向下扇形辐射；

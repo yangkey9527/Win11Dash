@@ -1619,7 +1619,7 @@ class DashWindow(QWidget):
 
     def _apply_layout(self, keep_center=False):
         L = LAYOUTS[self._layout_key]
-        bw, bh = L["w"], L["h"] + (moyu_strip_height(self._layout_key, True)
+        bw, bh = L["w"], L["h"] + (moyu_strip_height(self._layout_key)
                                    if self._moyu else 0)
         s = self._scale
         old_center = self.frameGeometry().center() if keep_center else None
@@ -1916,7 +1916,7 @@ class DashWindow(QWidget):
         th = self._th
         rect = QRectF(2, 2, LAYOUTS[self._layout_key]["w"] - 4,
                       LAYOUTS[self._layout_key]["h"]
-                      + (moyu_strip_height(self._layout_key, True)
+                      + (moyu_strip_height(self._layout_key)
                          if self._moyu else 0) - 4)
         grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
         g0, g1 = th["win_grad"]

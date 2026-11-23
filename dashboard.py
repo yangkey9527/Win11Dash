@@ -18,7 +18,8 @@ from PySide6.QtWidgets import (QApplication, QWidget, QSystemTrayIcon, QMenu,
                                QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton)
 import quotes
-from PySide6.QtCore import Qt, QTimer, QRectF, QPointF
+from PySide6.QtCore import Qt, QTimer, QRectF, QPointF, Property
+from PySide6.QtCore import QPropertyAnimation, QAbstractAnimation, QEasingCurve
 from PySide6.QtGui import (
     QPainter, QColor, QFont, QFontMetricsF, QLinearGradient, QConicalGradient,
     QRadialGradient, QPen, QBrush, QAction, QIcon, QPixmap, QPainterPath,
@@ -440,6 +441,25 @@ class ClusterWidget(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(30)
+        # 3D 翻转：cluster（仪表盘）/ moyu（摸鱼面板）
+        self._flip_state = "cluster"       # 当前稳定态
+        self._flip_progress = 0.0           # 动画进度 0→1
+        self._flip_content = "cluster"      # 动画期间实际画什么（DashWindow 在中间点切换）
+
+    # QProperty：flip_progress（用于 QPropertyAnimation）
+    @Property(float)
+    def flip_progress(self):
+        return self._flip_progress
+
+    @flip_progress.setter
+    def flip_progress(self, v):
+        self._flip_progress = v
+        self.update()
+
+    def set_flip_content(self, state):
+        """动画中间点由 DashWindow 调用，切换实际绘制内容"""
+        self._flip_content = state
+        self.update()
 
     def set_appearance(self, layout_key, theme_key, scale):
         """布局/主题/缩放变化时由 DashWindow 调用"""
@@ -545,8 +565,39 @@ class ClusterWidget(QWidget):
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+
+        # --- 3D 翻转：绕 X 轴旋转，用 Y 方向 scale 模拟上下翻 ---
+        prog = self._flip_progress
+        if prog < 0.5:
+            # 退场阶段：当前 state 的内容逐渐向下翻走
+            angle = prog * 180                     # 0→90°
+            sy = math.cos(math.radians(angle))     # 1→0
+            opacity = 1.0 - prog * 2               # 1→0
+        else:
+            # 进场阶段：新 state 的内容逐渐向下翻正
+            angle = (1.0 - prog) * 180             # 90°→0
+            sy = math.cos(math.radians(angle))     # 0→1
+            opacity = (prog - 0.5) * 2              # 0→1
+
+        # 以中心为锚点做 Y 方向缩放（上下翻）
+        w = self.width()
+        h = self.height()
+        p.translate(w / 2, h / 2)
+        p.scale(1.0, sy)
+        p.translate(-w / 2, -h / 2)
+        p.setOpacity(opacity)
+
         p.scale(self._scale, self._scale)   # 矢量缩放：逻辑坐标绘制
-        # 先画外侧小表，后画大表（交叠层次）
+
+        if self._flip_content == "cluster":
+            self._paint_cluster(p)
+        else:
+            self._paint_moyu_panel(p)
+
+        p.end()
+
+    def _paint_cluster(self, p):
+        """仪表盘视图（5 个 gauge + 侧栏，摸鱼内容在 flip 后的 moyu 面板）"""
         for idx in (0, 4, 1, 3, 2):
             key, cx, cy, r, vmin, vmax, label, unit, a0, span \
                 = self._gauges[idx]
@@ -562,14 +613,206 @@ class ClusterWidget(QWidget):
             if key == "cpu_load":
                 self._draw_center_digits(p, cx, cy, r)
         if self._th.get("neon") is not None:
-            self._draw_neon_overhead(p)   # 灯泡/光束画在侧栏文字之下
+            self._draw_neon_overhead(p)
         if self._layout_key == "h":
             self._draw_side_widgets_h(p)
         else:
             self._draw_side_widgets_v(p)
-        if self._moyu:
-            self._draw_moyu_strip(p)
-        p.end()
+
+    def _paint_moyu_panel(self, p):
+        """摸鱼面板视图（两版独立排版，严格像素定位）：
+        横版（620×210）：横向三段式布局，不做竖排
+        竖版（210×658）：传统中文竖排（逐字符上下排布）"""
+        th = self._th
+        key = self._layout_key
+        L = LAYOUTS[key]
+        logic_w, logic_h = L["w"], L["h"]
+
+        dim = C(th["text_sub"])
+        gold = C(th["text_mem"])
+        stroke = C(th["stroke"])
+
+        today_raw = moyu_amount(self._salary)
+        month_raw = moyu_month(self._salary)
+        today_num = f"￥{today_raw:.3f}"
+        month_num = f"￥{month_raw:.2f}"
+
+        now = datetime.datetime.now()
+        if now.weekday() < 5:
+            t_sec = now.hour * 3600 + now.minute * 60 + now.second
+            hours = max(0.0, min(9.0, (t_sec - 9 * 3600) / 3600))
+        else:
+            hours = 0.0
+
+        # ========================================================
+        # 横版（620×210）——严格像素定位，绝不重叠
+        # ========================================================
+        if key == "h":
+            big_fs = 56    # 大字略缩小（滚动时太抢眼）
+            pre_fs = 18
+            sub_fs = 17
+            quote_fs = 19
+
+            # 整体再上移，y_top 6→2
+            y_top = 2
+
+            # 1. 小前缀
+            pre_f = QFont("Microsoft YaHei", -1)
+            pre_f.setPixelSize(pre_fs)
+            fm_pre = QFontMetricsF(pre_f)
+            pre_text = "今日摸鱼已入账"
+            p.setPen(QPen(dim, 1))
+            p.setFont(pre_f)
+            p.drawText(QPointF((logic_w - fm_pre.horizontalAdvance(pre_text)) / 2,
+                               y_top + pre_fs), pre_text)
+
+            # 2. 巨大发光金额
+            big_f = QFont("Consolas", -1)
+            big_f.setPixelSize(big_fs)
+            big_f.setBold(True)
+            p.setFont(big_f)
+            fm_big = QFontMetricsF(big_f)
+            w_big = fm_big.horizontalAdvance(today_num)
+            cy_big = y_top + pre_fs + big_fs * 0.6 + big_fs   # 行基线
+
+            glow_col = QColor(gold)
+            glow_col.setAlpha(50)
+            p.setPen(QPen(glow_col, 1))
+            p.drawText(QPointF((logic_w - w_big) / 2 + 2, cy_big + 1), today_num)
+            p.setPen(QPen(gold, 1))
+            p.drawText(QPointF((logic_w - w_big) / 2, cy_big), today_num)
+
+            # 3. 分隔线
+            sep_y = cy_big + big_fs * 0.28
+            p.setPen(QPen(stroke, 1, Qt.DashLine))
+            p.drawLine(QPointF(80, sep_y), QPointF(logic_w - 80, sep_y))
+
+            # 4. 标语（分隔线下，金色加粗带引号）—— 位置上移替换本月
+            quote_f = QFont("Microsoft YaHei", -1)
+            quote_f.setPixelSize(quote_fs)
+            quote_f.setBold(True)
+            p.setFont(quote_f)
+            fm_q = QFontMetricsF(quote_f)
+            q_text = f"「{self._quote}」"
+            w_q = fm_q.horizontalAdvance(q_text)
+            cy_q = sep_y + quote_fs * 1.6
+            p.setPen(QPen(gold, 1))
+            p.drawText(QPointF((logic_w - w_q) / 2, cy_q), q_text)
+
+            # 5. 本月 + 时长（同一行，底部）
+            sub_f = QFont("Microsoft YaHei", -1)
+            sub_f.setPixelSize(sub_fs)
+            p.setFont(sub_f)
+            fm_sub = QFontMetricsF(sub_f)
+            month_text = f"本月已赚 {month_num}"
+            hour_text = f"已摸 {hours:.1f} 小时"
+            w_month = fm_sub.horizontalAdvance(month_text)
+            w_hour = fm_sub.horizontalAdvance(hour_text)
+            gap = 30
+            total_w = w_month + gap + w_hour
+            cy_sub = logic_h - 8   # 底距 8px
+            p.setPen(QPen(dim, 1))
+            x0 = (logic_w - total_w) / 2
+            p.drawText(QPointF(x0, cy_sub), month_text)
+            p.drawText(QPointF(x0 + w_month + gap, cy_sub), hour_text)
+
+        # ========================================================
+        # 竖版（210×658）—— 多列竖排（古籍风）
+        # 列内：字符从上到下；列间：从左到右
+        # 3 列布局：左=今日+大额、中=本月+时长、右=标语
+        # ========================================================
+        else:
+            margin_lr = 8
+            col_gap = 4
+            n_cols = 3
+            usable_w = logic_w - margin_lr * 2 - col_gap * (n_cols - 1)
+            col_w = usable_w // n_cols
+            top_pad = 10
+            bot_pad = 10
+            avail_h = logic_h - top_pad - bot_pad
+
+            # 3 列内容：每列 = [(chars_list, color, is_consolas, glow_on, bold, max_fs), ...]
+            # 列内多段之间空 20px
+            today_text = "今日摸鱼已入账"
+            month_text = f"本月已赚{month_num}"
+            hour_text = f"已摸{hours:.1f}h"
+            quote_chars = list("「" + self._quote + "」")
+
+            columns = [
+                # 左列：标签 + 大额
+                [(list(today_text), dim, False, False, False, 16),
+                 (list(today_num), gold, True, True, True, 22)],
+                # 中列：标语（金色加粗，满列高）
+                [(quote_chars, gold, False, False, True, 15)],
+                # 右列：本月 + 时长
+                [(list(month_text), dim, False, False, False, 14),
+                 (list(hour_text), dim, False, False, False, 13)],
+            ]
+
+            for col_idx, col_sections in enumerate(columns):
+                # 列的左边界
+                col_x = margin_lr + col_idx * (col_w + col_gap)
+                col_cx = col_x + col_w / 2
+
+                # 每段先按比例分配高度，再自适应字号
+                total_chars_in_col = sum(len(s[0]) for s in col_sections)
+                section_gap = 20   # 列内段间距
+
+                # 可用高度减去段间 gap
+                n_sections = len(col_sections)
+                gap_total = section_gap * (n_sections - 1)
+                usable_h_col = avail_h - gap_total
+
+                y_cursor = top_pad
+                for sec_idx, (chars, color, is_consolas, glow_on, bold, max_fs) in enumerate(col_sections):
+                    # 本段分配高度
+                    sec_h = max(30, int(len(chars) / max(1, total_chars_in_col) * usable_h_col))
+
+                    # 选字体
+                    if is_consolas:
+                        f = QFont("Consolas", -1)
+                    else:
+                        f = QFont("Microsoft YaHei", -1)
+                    f.setBold(bold)
+                    f.setPixelSize(max_fs)
+                    p.setFont(f)
+                    fm = QFontMetricsF(f)
+                    line_h = fm.lineSpacing()
+
+                    # 自适应缩小到 fits
+                    while line_h * len(chars) > sec_h and f.pixelSize() > 7:
+                        f.setPixelSize(f.pixelSize() - 1)
+                        p.setFont(f)
+                        fm = QFontMetricsF(f)
+                        line_h = fm.lineSpacing()
+
+                    # 本段内垂直居中
+                    total_text_h = line_h * len(chars)
+                    y_start = y_cursor + (sec_h - total_text_h) / 2 + fm.ascent()
+
+                    # 发光叠层
+                    if glow_on:
+                        glow = QColor(color)
+                        glow.setAlpha(50)
+                        p.setPen(QPen(glow, 1))
+                        for i, ch in enumerate(chars):
+                            ch_w = fm.horizontalAdvance(ch)
+                            p.drawText(QPointF(col_cx - ch_w / 2 + 1, y_start + i * line_h + 1), ch)
+
+                    # 正常绘制
+                    p.setPen(QPen(color, 1))
+                    for i, ch in enumerate(chars):
+                        ch_w = fm.horizontalAdvance(ch)
+                        p.drawText(QPointF(col_cx - ch_w / 2, y_start + i * line_h), ch)
+
+                    y_cursor += sec_h + section_gap
+
+                # 列间竖向虚线（画在两列之间的间隙中央）
+                if col_idx < n_cols - 1:
+                    sep_x = col_x + col_w + col_gap / 2
+                    p.setPen(QPen(stroke, 1, Qt.DashLine))
+                    p.drawLine(QPointF(sep_x, top_pad + 20),
+                               QPointF(sep_x, logic_h - bot_pad - 20))
 
     def _draw_moyu_strip(self, p):
         """底部摸鱼金额条：
@@ -1551,9 +1794,16 @@ class DashWindow(QWidget):
         super().__init__()
         self._cfg = cfg
         self._drag_pos = None
+        self._press_pos = None
+        self._dragging = False
         self._last_temp = None
         self._first_hide = True
         self._menu = None
+        # 3D 翻转状态（动画实例在 cluster 创建后初始化，见下）
+        self._flip_state = "cluster"
+        self._flip_target = None
+        self._flip_mid_fired = False
+        self._flip_anim = None
         self._scale = float(cfg.get("scale", 1.0))
         self._layout_key = cfg.get("layout", "h")
         self._theme_key = cfg.get("theme", "dark")
@@ -1570,6 +1820,15 @@ class DashWindow(QWidget):
                                      self._theme_key, self._scale,
                                      self._needle, self._net_mode)
         self.cluster.set_moyu(self._moyu, self._salary)
+
+        # 动画：cluster 已创建，现在绑定
+        self._flip_anim = QPropertyAnimation(self.cluster, b"flip_progress", self)
+        self._flip_anim.setDuration(450)
+        self._flip_anim.setEasingCurve(QEasingCurve.InOutCubic)
+        self._flip_anim.setStartValue(0.0)
+        self._flip_anim.setEndValue(1.0)
+        self._flip_anim.valueChanged.connect(self._on_flip_progress)
+        self._flip_anim.finished.connect(self._on_flip_finished)
 
         from PySide6.QtWidgets import QPushButton
         self.btn_close = QPushButton("×", self)
@@ -1619,8 +1878,7 @@ class DashWindow(QWidget):
 
     def _apply_layout(self, keep_center=False):
         L = LAYOUTS[self._layout_key]
-        bw, bh = L["w"], L["h"] + (moyu_strip_height(self._layout_key)
-                                   if self._moyu else 0)
+        bw, bh = L["w"], L["h"]
         s = self._scale
         old_center = self.frameGeometry().center() if keep_center else None
         self.setFixedSize(round(bw * s), round(bh * s))
@@ -1737,13 +1995,24 @@ class DashWindow(QWidget):
 
     # --- 交互 --------------------------------------------------------------
 
+    # 点击 vs 拖拽阈值（物理像素）
+    _DRAG_THRESHOLD = 5
+
     def mousePressEvent(self, ev):
         if ev.button() == Qt.LeftButton:
             self._drag_pos = (ev.globalPosition().toPoint()
                               - self.frameGeometry().topLeft())
+            self._press_pos = ev.position().toPoint()   # 窗口内物理坐标
+            self._dragging = False
 
     def mouseMoveEvent(self, ev):
         if self._drag_pos is not None and ev.buttons() == Qt.LeftButton:
+            if not self._dragging:
+                # 尚未进入拖拽，判定是否越过阈值
+                delta = ev.position().toPoint() - self._press_pos
+                if delta.manhattanLength() < self._DRAG_THRESHOLD:
+                    return   # 还在阈值内，视为点击候选，不移动
+                self._dragging = True
             self.move(ev.globalPosition().toPoint() - self._drag_pos)
 
     def mouseReleaseEvent(self, ev):
@@ -1752,11 +2021,18 @@ class DashWindow(QWidget):
             #  - 松开时弹，松开事件已被本窗口消费，不会落到菜单上误触发菜单项
             #  - 不依赖 WM_CONTEXTMENU 的派发时机（本机会延迟近 2 秒才派发）
             #  - 配合 popup() 使用，避免 exec() 的嵌套事件循环把菜单当场关闭
+            self._drag_pos = None
+            self._dragging = False
             self._show_context_menu(ev.globalPosition().toPoint())
             return
-        self._drag_pos = None
         if ev.button() == Qt.LeftButton:
-            self._save_cfg()   # 拖拽结束记住位置
+            was_click = (self._drag_pos is not None) and not self._dragging
+            self._drag_pos = None
+            self._dragging = False
+            if was_click:
+                self._handle_click(ev.position().toPoint())
+            else:
+                self._save_cfg()   # 拖拽结束记住位置
 
     def wheelEvent(self, ev):
         # 悬停时 Ctrl+滚轮 无级缩放
@@ -1766,6 +2042,40 @@ class DashWindow(QWidget):
             ev.accept()
         else:
             ev.ignore()
+
+    # --- 3D 翻转切换 -------------------------------------------------------
+
+    def _handle_click(self, pos):
+        """左键原地松开（非拖拽）→ 触发翻转"""
+        if self._flip_anim.state() == QAbstractAnimation.Running:
+            return   # 动画播放中，忽略
+        self.flip()
+
+    def flip(self):
+        """开始 3D 翻转：cluster ↔ moyu"""
+        if self._flip_anim.state() == QAbstractAnimation.Running:
+            return
+        target = "moyu" if self._flip_state == "cluster" else "cluster"
+        self._flip_target = target
+        self._flip_mid_fired = False
+        # 动画从 0 到 1（不管方向）
+        self._flip_anim.setStartValue(0.0)
+        self._flip_anim.setEndValue(1.0)
+        self._flip_anim.start()
+
+    def _on_flip_progress(self, v):
+        """动画每一帧回调：中间点切换绘制内容"""
+        if v >= 0.5 and not self._flip_mid_fired and self._flip_target is not None:
+            self._flip_mid_fired = True
+            self.cluster.set_flip_content(self._flip_target)
+
+    def _on_flip_finished(self):
+        """动画结束：稳定到新状态，progress 归零"""
+        if self._flip_target is not None:
+            self._flip_state = self._flip_target
+            self._flip_target = None
+        self._flip_mid_fired = False
+        self.cluster.flip_progress = 0.0
 
     def _show_context_menu(self, pos):
         # 复用的旧菜单先回收（父对象为 self，否则子对象会一直堆积）
@@ -1915,9 +2225,7 @@ class DashWindow(QWidget):
         p.scale(self._scale, self._scale)   # 与表盘同一逻辑坐标系
         th = self._th
         rect = QRectF(2, 2, LAYOUTS[self._layout_key]["w"] - 4,
-                      LAYOUTS[self._layout_key]["h"]
-                      + (moyu_strip_height(self._layout_key)
-                         if self._moyu else 0) - 4)
+                      LAYOUTS[self._layout_key]["h"] - 4)
         grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
         g0, g1 = th["win_grad"]
         grad.setColorAt(0, C(g0))
